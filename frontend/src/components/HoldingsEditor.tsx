@@ -1,6 +1,7 @@
 "use client";
 
 import type { HoldingInput } from "@/lib/types";
+import { Term } from "./InfoTip";
 import { TickerSearch } from "./TickerSearch";
 import { Button, cx } from "./ui";
 
@@ -60,7 +61,7 @@ export function HoldingsEditor({ rows, onChange }: Props) {
         <thead>
           <tr className="text-left text-xs uppercase tracking-wide text-slate-500">
             <th className="pb-2 font-medium">Ticker</th>
-            <th className="w-32 pb-2 font-medium">Weight %</th>
+            <th className="w-32 pb-2 font-medium"><Term term="weight">Weight %</Term></th>
             <th className="w-10 pb-2" />
           </tr>
         </thead>

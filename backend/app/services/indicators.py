@@ -77,6 +77,13 @@ def volume(df: pd.DataFrame, period: int) -> dict[str, pd.Series]:
     return {"volume": vol, "average": vol.rolling(period, min_periods=period).mean()}
 
 
+def obv(df: pd.DataFrame, period: int) -> dict[str, pd.Series]:
+    """On-Balance Volume: running total of volume, added on up closes and subtracted on down closes."""
+    direction = df["Close"].diff().apply(lambda d: 1 if d > 0 else (-1 if d < 0 else 0))
+    value = (direction * df["Volume"].astype(float)).cumsum()
+    return {"obv": value, "signal": value.ewm(span=period, adjust=False, min_periods=period).mean()}
+
+
 REGISTRY: dict[str, Indicator] = {
     ind.id: ind
     for ind in [
@@ -115,6 +122,15 @@ REGISTRY: dict[str, Indicator] = {
             params=[Param("period", "Average period", 20, 2, 200)],
             outputs=["volume", "average"],
             compute=volume,
+        ),
+        Indicator(
+            id="obv",
+            name="On-Balance Volume",
+            description="Cumulative volume signed by the close's direction, with an EMA signal line. Rising OBV means volume flows in on up days.",
+            pane="obv",
+            params=[Param("period", "Signal EMA", 20, 2, 200)],
+            outputs=["obv", "signal"],
+            compute=obv,
         ),
         Indicator(
             id="rsi",
@@ -163,3 +179,11 @@ def parse_spec(spec: str) -> tuple[Indicator, list[int]]:
         raise ValueError("macd: fast period must be smaller than slow period")
     return indicator, params
 
+
+
+def spec_key(indicator: Indicator, params: list[int]) -> str:
+    return f"{indicator.id}:{','.join(map(str, params))}"
+
+
+def spec_label(indicator: Indicator, params: list[int]) -> str:
+    return f"{indicator.id.upper()} ({', '.join(map(str, params))})"

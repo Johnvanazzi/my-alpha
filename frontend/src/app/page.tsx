@@ -10,11 +10,10 @@ import { pct } from "@/lib/format";
 import type { Portfolio } from "@/lib/types";
 
 const SECTIONS = [
-  { href: "/portfolios", title: "Portfolios", text: "Build portfolios from tickers and weights, then study allocation, risk and performance." },
-  { href: "/sharpe", title: "Sharpe Calculator", text: "Risk-adjusted return for any mix of tickers against the T-bill rate." },
+  { href: "/portfolios", title: "Portfolios", text: "Allocation, Sharpe and risk vs a benchmark, rolling metrics and drawdowns, and Hierarchical Risk Parity." },
   { href: "/screener", title: "Screener", text: "Filter stocks by sector, size, valuation and dividends, or use Yahoo presets." },
-  { href: "/technical", title: "Technical Analysis", text: "Price history with moving averages, Bollinger Bands, RSI, MACD and volume." },
-  { href: "/fundamentals", title: "Fundamentals", text: "Revenue, gross profit, EBITDA and EPS across annual and quarterly reports." },
+  { href: "/compare", title: "Compare Stocks", text: "Two to four stocks side by side: Sharpe, returns, benchmark beta/alpha/correlation, drawdowns and fundamentals." },
+  { href: "/stocks", title: "Stock Analysis", text: "Candlesticks with scored indicators, plus revenue, gross profit, EBITDA and EPS from financial reports." },
 ];
 
 export default function Home() {
@@ -26,7 +25,7 @@ export default function Home() {
       <PageHeader title="Overview" subtitle="Track your investments and research stocks with Yahoo Finance data." />
 
       <div className="mb-8 max-w-xl">
-        <TickerSearch onSelect={(s) => router.push(`/technical?ticker=${encodeURIComponent(s)}`)} placeholder="Jump to a stock: AAPL, Microsoft, PETR4.SA…" />
+        <TickerSearch onSelect={(s) => router.push(`/stocks?ticker=${encodeURIComponent(s)}`)} placeholder="Jump to a stock: AAPL, Microsoft, PETR4.SA…" />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">

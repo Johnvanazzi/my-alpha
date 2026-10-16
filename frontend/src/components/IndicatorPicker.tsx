@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { PALETTE } from "@/lib/format";
+import { INDICATOR_TERM } from "@/lib/glossary";
 import type { IndicatorMeta } from "@/lib/types";
+import { InfoTip } from "./InfoTip";
 import { Button, Select } from "./ui";
 
 export interface ActiveIndicator {
@@ -42,11 +44,13 @@ export function IndicatorPicker({ available, active, onChange }: Props) {
       <div className="flex gap-2">
         <Select value={choice} onChange={(e) => setChoice(e.target.value)} className="min-w-0 flex-1">
           <option value="">Add indicator…</option>
-          {["price", "volume", "rsi", "macd"].map((pane) => {
-            const items = available.filter((i) => i.pane === pane);
+          {[
+            { label: "Price overlays", items: available.filter((i) => i.pane === "price") },
+            { label: "Lower panes", items: available.filter((i) => i.pane !== "price") },
+          ].map(({ label, items }) => {
             if (!items.length) return null;
             return (
-              <optgroup key={pane} label={pane === "price" ? "Price overlays" : "Lower panes"}>
+              <optgroup key={label} label={label}>
                 {items.map((i) => (
                   <option key={i.id} value={i.id}>
                     {i.name}
@@ -69,8 +73,9 @@ export function IndicatorPicker({ available, active, onChange }: Props) {
           return (
             <li key={i} className="flex flex-wrap items-center gap-2 rounded-md border border-slate-800 bg-slate-950 px-2.5 py-2">
               <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: indicatorColor(i) }} />
-              <span className="text-sm font-medium text-slate-200" title={meta.description}>
+              <span className="inline-flex items-center text-sm font-medium text-slate-200">
                 {meta.name}
+                <InfoTip term={INDICATOR_TERM[meta.id]} text={INDICATOR_TERM[meta.id] ? undefined : meta.description} />
               </span>
               <div className="ml-auto flex items-center gap-1.5">
                 {meta.params.map((p, j) => (

@@ -9,6 +9,7 @@ threadpool).
 import math
 import threading
 from collections.abc import Callable
+from datetime import date
 from typing import Any, TypeVar
 
 import pandas as pd
@@ -22,6 +23,19 @@ T = TypeVar("T")
 VALID_PERIODS = ("1mo", "3mo", "6mo", "ytd", "1y", "2y", "5y", "10y", "max")
 VALID_INTERVALS = ("1d", "1wk", "1mo")
 RISK_FREE_TICKER = "^IRX"  # 13-week US Treasury bill yield, quoted in percent
+# Indicators and backtests need history before the visible window (e.g. SMA 200),
+# so we load a longer period and trim back to the requested one.
+WARMUP_PERIOD = {
+    "1mo": "1y",
+    "3mo": "2y",
+    "6mo": "2y",
+    "ytd": "2y",
+    "1y": "2y",
+    "2y": "5y",
+    "5y": "10y",
+    "10y": "max",
+    "max": "max",
+}
 
 
 class MarketDataError(Exception):
@@ -50,6 +64,17 @@ def validate_period(period: str, interval: str = "1d") -> None:
         raise ValueError(f"interval must be one of {', '.join(VALID_INTERVALS)}")
 
 
+def window_start(period: str, last: pd.Timestamp) -> pd.Timestamp | None:
+    """First date of `period` ending at `last` (None for "max")."""
+    if period == "max":
+        return None
+    if period == "ytd":
+        return pd.Timestamp(year=last.year, month=1, day=1)
+    if period.endswith("mo"):
+        return last - pd.DateOffset(months=int(period[:-2]))
+    return last - pd.DateOffset(years=int(period[:-1]))
+
+
 def clean_number(value: Any) -> float | None:
     """Convert numpy/pandas scalars to JSON-safe floats (NaN/inf -> None)."""
     if value is None:
@@ -64,6 +89,15 @@ def clean_number(value: Any) -> float | None:
 # --- Prices -------------------------------------------------------------------
 
 
+def _drop_non_positive(prices: pd.DataFrame) -> pd.DataFrame:
+    """Treat non-positive prices as missing.
+
+    Yahoo's dividend adjustment can turn early adjusted closes negative or zero
+    (e.g. D1EL34.SA in 2021), which would otherwise produce returns like -946%.
+    """
+    return prices.where(prices > 0)
+
+
 def get_history(ticker: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
     """OHLCV history (split/dividend adjusted) indexed by naive dates."""
     validate_period(period, interval)
@@ -73,7 +107,10 @@ def get_history(ticker: str, period: str = "1y", interval: str = "1d") -> pd.Dat
         df = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=True)
         if df.empty:
             raise MarketDataError(f"No price history found for {ticker}")
-        df = df[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Close"])
+        df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+        prices = ["Open", "High", "Low", "Close"]
+        df[prices] = _drop_non_positive(df[prices])
+        df = df.dropna(subset=["Close"])
         df.index = pd.DatetimeIndex(df.index).tz_localize(None)
         return df
 
@@ -92,6 +129,7 @@ def get_closes(tickers: list[str], period: str = "1y") -> pd.DataFrame:
         closes = raw["Close"]
         if isinstance(closes, pd.Series):
             closes = closes.to_frame(tickers[0])
+        closes = _drop_non_positive(closes)
         closes.index = pd.DatetimeIndex(closes.index).tz_localize(None)
         missing = [t for t in tickers if t not in closes.columns or closes[t].dropna().empty]
         if missing:
@@ -99,6 +137,30 @@ def get_closes(tickers: list[str], period: str = "1y") -> pd.DataFrame:
         return closes[tickers]
 
     return cached(market_cache, ("closes", tuple(tickers), period), load)
+
+
+def get_split_adjusted_history(ticker: str, start: date) -> pd.DataFrame:
+    """Daily closes from `start` to today adjusted for splits only, plus split ratios.
+
+    Unlike `get_history`, dividends are not folded into the prices, so shares x close is
+    the real market value of a position. Columns: close, split (0 on days without one).
+    """
+    ticker = ticker.upper()
+
+    def load() -> pd.DataFrame:
+        df = yf.Ticker(ticker).history(start=start.isoformat(), interval="1d", auto_adjust=False, actions=True)
+        if df.empty:
+            raise MarketDataError(f"No price history found for {ticker}")
+        splits = df["Stock Splits"] if "Stock Splits" in df.columns else 0.0
+        out = pd.DataFrame({"close": df["Close"], "split": splits}).fillna({"split": 0.0})
+        out["close"] = out["close"].where(out["close"] > 0)
+        out = out.dropna(subset=["close"])
+        if out.empty:
+            raise MarketDataError(f"No price history found for {ticker}")
+        out.index = pd.DatetimeIndex(out.index).tz_localize(None).normalize()
+        return out[~out.index.duplicated(keep="last")]
+
+    return cached(market_cache, ("split_adjusted", ticker, start.isoformat()), load)
 
 
 def get_risk_free_rate() -> float:
@@ -146,6 +208,18 @@ _PROFILE_FIELDS = {
     "profitMargins": "profit_margin",
     "revenueGrowth": "revenue_growth",
     "earningsGrowth": "earnings_growth",
+    "returnOnEquity": "return_on_equity",
+    "returnOnAssets": "return_on_assets",
+    "netIncomeToCommon": "net_income_ttm",
+    "totalDebt": "total_debt",
+    "totalCash": "total_cash",
+    "debtToEquity": "debt_to_equity",
+    "currentRatio": "current_ratio",
+    "priceToBook": "price_to_book",
+    "trailingPegRatio": "peg_ratio",
+    "enterpriseToEbitda": "ev_to_ebitda",
+    "enterpriseToRevenue": "ev_to_revenue",
+    "financialCurrency": "financial_currency",
     "longBusinessSummary": "summary",
     "website": "website",
 }
@@ -193,17 +267,28 @@ def search(query: str, limit: int = 10) -> list[dict[str, Any]]:
     return cached(market_cache, ("search", query.lower(), limit), load)
 
 
-def get_income_statement(ticker: str, frequency: str = "annual") -> pd.DataFrame:
-    """Income statement with periods as rows (oldest first) and line items as columns."""
+STATEMENTS = {
+    "income": ("income_stmt", "quarterly_income_stmt"),
+    "balance": ("balance_sheet", "quarterly_balance_sheet"),
+    "cashflow": ("cashflow", "quarterly_cashflow"),
+}
+
+
+def get_statement(ticker: str, kind: str = "income", frequency: str = "annual") -> pd.DataFrame:
+    """Income statement, balance sheet or cash flow with periods as rows (oldest first) and line items as columns."""
     if frequency not in ("annual", "quarterly"):
         raise ValueError("frequency must be 'annual' or 'quarterly'")
+    annual, quarterly = STATEMENTS[kind]
     ticker = ticker.upper()
 
     def load() -> pd.DataFrame:
-        t = yf.Ticker(ticker)
-        df = t.income_stmt if frequency == "annual" else t.quarterly_income_stmt
+        df = getattr(yf.Ticker(ticker), annual if frequency == "annual" else quarterly)
         if df is None or df.empty:
             raise MarketDataError(f"No financial statements found for {ticker}")
         return df.T.sort_index()
 
-    return cached(fundamentals_cache, ("income", ticker, frequency), load)
+    return cached(fundamentals_cache, (kind, ticker, frequency), load)
+
+
+def get_income_statement(ticker: str, frequency: str = "annual") -> pd.DataFrame:
+    return get_statement(ticker, "income", frequency)
