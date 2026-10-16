@@ -7,10 +7,9 @@ import { cx } from "./ui";
 const LINKS = [
   { href: "/", label: "Overview" },
   { href: "/portfolios", label: "Portfolios" },
-  { href: "/sharpe", label: "Sharpe Calculator" },
   { href: "/screener", label: "Screener" },
-  { href: "/technical", label: "Technical" },
-  { href: "/fundamentals", label: "Fundamentals" },
+  { href: "/stocks", label: "Stock Analysis" },
+  { href: "/compare", label: "Compare" },
 ];
 
 export function Nav() {
@@ -19,7 +18,7 @@ export function Nav() {
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
-      <div className="mx-auto flex max-w-7xl items-center gap-6 overflow-x-auto px-4 py-3">
+      <div className="flex w-full items-center gap-6 overflow-x-auto px-4 py-3 lg:px-8">
         <Link href="/" className="shrink-0 text-lg font-bold tracking-tight text-white">
           my<span className="text-sky-400">α</span>
         </Link>

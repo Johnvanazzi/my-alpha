@@ -23,11 +23,11 @@ def normalize_weights(weights: dict[str, float]) -> dict[str, float]:
     return {ticker: w / total for ticker, w in weights.items()}
 
 
-def _daily_rf(annual_rf: float) -> float:
+def daily_rf(annual_rf: float) -> float:
     return (1 + annual_rf) ** (1 / TRADING_DAYS) - 1
 
 
-def _stats(returns: pd.Series, annual_rf: float) -> dict[str, float | None]:
+def return_stats(returns: pd.Series, annual_rf: float) -> dict[str, float | None]:
     """Annualised statistics for a series of simple daily returns."""
     returns = returns.dropna()
     if len(returns) < 2:
@@ -38,7 +38,7 @@ def _stats(returns: pd.Series, annual_rf: float) -> dict[str, float | None]:
     total_return = growth.iloc[-1] - 1
     annual_return = growth.iloc[-1] ** (1 / years) - 1
 
-    excess = returns - _daily_rf(annual_rf)
+    excess = returns - daily_rf(annual_rf)
     volatility = returns.std(ddof=1) * np.sqrt(TRADING_DAYS)
     sharpe = excess.mean() / excess.std(ddof=1) * np.sqrt(TRADING_DAYS) if excess.std(ddof=1) > 0 else None
 
@@ -57,26 +57,40 @@ def _stats(returns: pd.Series, annual_rf: float) -> dict[str, float | None]:
     }
 
 
+def load_returns(weights: dict[str, float], period: str) -> tuple[dict[str, float], pd.DataFrame, pd.Series]:
+    """Normalised weights, aligned daily asset returns and the daily-rebalanced portfolio returns."""
+    if not weights:
+        raise ValueError("the portfolio has no holdings")
+    weights = normalize_weights({t.upper(): w for t, w in weights.items()})
+
+    closes = get_closes(list(weights), period).ffill().dropna()
+    if len(closes) < 3:
+        raise MarketDataError("Not enough overlapping price history for these tickers")
+    asset_returns = closes.pct_change().dropna()
+    portfolio_returns = asset_returns @ pd.Series(weights)[asset_returns.columns]
+    return weights, asset_returns, portfolio_returns
+
+
+def load_benchmark_returns(benchmark: str, period: str, index: pd.DatetimeIndex) -> pd.Series:
+    """Benchmark daily returns aligned to `index` (NaN where the benchmark didn't trade)."""
+    closes = get_closes([benchmark], period)[benchmark.upper()]
+    return closes.pct_change().reindex(index).rename(benchmark.upper())
+
+
+def resolve_risk_free(risk_free_rate: float | None) -> float:
+    return get_risk_free_rate() if risk_free_rate is None else risk_free_rate
+
+
 def analyze(
     weights: dict[str, float],
     period: str = "1y",
     risk_free_rate: float | None = None,
     benchmark: str | None = "SPY",
 ) -> dict[str, Any]:
-    if not weights:
-        raise ValueError("the portfolio has no holdings")
-
-    weights = normalize_weights({t.upper(): w for t, w in weights.items()})
+    weights, asset_returns, portfolio_returns = load_returns(weights, period)
     tickers = list(weights)
-    rf = get_risk_free_rate() if risk_free_rate is None else risk_free_rate
-
-    closes = get_closes(tickers, period).ffill().dropna()
-    if len(closes) < 3:
-        raise MarketDataError("Not enough overlapping price history for these tickers")
-    asset_returns = closes.pct_change().dropna()
-
     w = pd.Series(weights)[asset_returns.columns]
-    portfolio_returns = asset_returns @ w
+    rf = resolve_risk_free(risk_free_rate)
 
     cov = asset_returns.cov() * TRADING_DAYS
     portfolio_var = float(w @ cov @ w)
@@ -89,25 +103,24 @@ def analyze(
                 "ticker": ticker,
                 "weight": weights[ticker],
                 "risk_contribution": clean_number(risk_contribution[ticker]),
-                **_stats(asset_returns[ticker], rf),
+                **return_stats(asset_returns[ticker], rf),
             }
         )
 
     growth = pd.DataFrame({"portfolio": (1 + portfolio_returns).cumprod() * 100})
     benchmark_stats = None
+    benchmark_error = None
     if benchmark:
         try:
-            bench_close = get_closes([benchmark], period)[benchmark.upper()]
-            bench_returns = bench_close.pct_change().reindex(portfolio_returns.index)
-            benchmark_stats = {"ticker": benchmark.upper(), **_stats(bench_returns, rf)}
+            bench_returns = load_benchmark_returns(benchmark, period, portfolio_returns.index)
+            benchmark_stats = {"ticker": benchmark.upper(), **return_stats(bench_returns, rf)}
             growth["benchmark"] = (1 + bench_returns.fillna(0)).cumprod() * 100
             aligned = pd.concat([portfolio_returns, bench_returns], axis=1).dropna()
             bench_var = aligned.iloc[:, 1].var()
             benchmark_stats["portfolio_beta"] = clean_number(aligned.cov().iloc[0, 1] / bench_var) if bench_var > 0 else None
-        except MarketDataError:
+        except (MarketDataError, ValueError) as exc:
             benchmark_stats = None
-
-    correlation = asset_returns.corr()
+            benchmark_error = f"Benchmark {benchmark.upper()} unavailable: {exc}"
 
     return {
         "period": period,
@@ -116,13 +129,10 @@ def analyze(
         "observations": len(asset_returns),
         "risk_free_rate": rf,
         "weights": weights,
-        "portfolio": _stats(portfolio_returns, rf),
+        "portfolio": return_stats(portfolio_returns, rf),
         "benchmark": benchmark_stats,
+        "benchmark_error": benchmark_error,
         "assets": assets,
-        "correlation": {
-            "tickers": list(correlation.columns),
-            "matrix": [[clean_number(v) for v in row] for row in correlation.to_numpy()],
-        },
         "growth": [
             {"date": idx.date().isoformat(), **{col: clean_number(row[col]) for col in growth.columns}}
             for idx, row in growth.iterrows()

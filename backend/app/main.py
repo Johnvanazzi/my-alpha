@@ -4,17 +4,15 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app import models  # noqa: F401  (registers tables on Base.metadata)
 from app.config import settings
-from app.db import Base, engine
-from app.routers import analysis, market, portfolios
+from app.migrate import run_migrations
+from app.routers import analysis, backtests, market, portfolios
 from app.services.market_data import MarketDataError
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Fine while the schema is small; switch to Alembic migrations once it starts changing.
-    Base.metadata.create_all(engine)
+    run_migrations()
     yield
 
 
@@ -38,7 +36,7 @@ async def value_error(_: Request, exc: ValueError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
-for router in (portfolios.router, market.router, analysis.router):
+for router in (portfolios.router, market.router, analysis.router, backtests.router):
     app.include_router(router, prefix="/api")
 
 

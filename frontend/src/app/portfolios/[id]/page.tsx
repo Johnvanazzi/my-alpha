@@ -1,16 +1,33 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
-import useSWR from "swr";
-import { AssetTable, CorrelationMatrix, GrowthChart, PortfolioStats, tooltipStyle } from "@/components/AnalyticsView";
+import useSWR, { useSWRConfig } from "swr";
+import { AssetTable, GrowthChart, PortfolioStats, tooltipStyle } from "@/components/AnalyticsView";
+import { BacktestPanel } from "@/components/BacktestPanel";
+import { EvolutionPanel } from "@/components/EvolutionView";
+import { HrpPanel } from "@/components/HrpView";
+import { TearsheetPanel } from "@/components/TearsheetView";
+import { BenchmarkPicker } from "@/components/BenchmarkPicker";
+import { Term } from "@/components/InfoTip";
 import { HoldingsEditor, type HoldingRow, toHoldings, toRows, validateRows } from "@/components/HoldingsEditor";
 import { Button, Card, Empty, ErrorBox, Input, PageHeader, Segmented, Spinner } from "@/components/ui";
 import { api, fetcher, paths } from "@/lib/api";
 import { compactMoney, num, PALETTE, pct, PERIODS } from "@/lib/format";
 import type { Analytics, Composition, Portfolio } from "@/lib/types";
+
+type Tab = "evolution" | "performance" | "rolling" | "hrp" | "backtest";
+const TABS: { value: Tab; label: string }[] = [
+  { value: "evolution", label: "Evolution" },
+  { value: "performance", label: "Performance" },
+  { value: "rolling", label: "Rolling & drawdowns" },
+  { value: "hrp", label: "Risk parity (HRP)" },
+  { value: "backtest", label: "Backtest" },
+];
+
+const COLLAPSED_KEY = "my-alpha:holdings-collapsed";
 
 const ANALYTICS_PERIODS = PERIODS.filter((p) => ["3mo", "6mo", "ytd", "1y", "2y", "5y", "10y"].includes(p.value));
 
@@ -25,9 +42,42 @@ export default function PortfolioPage() {
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState("");
 
+  const router = useRouter();
+  const [collapsed, setCollapsed] = useState(false);
+  const [copying, setCopying] = useState(false);
   const [period, setPeriod] = useState("1y");
+  const [tab, setTab] = useState<Tab>("performance");
+  const { mutate: mutateAll } = useSWRConfig();
   const [rfInput, setRfInput] = useState("");
-  const rf = rfInput.trim() === "" ? null : parseFloat(rfInput) / 100;
+  const rfParsed = rfInput.trim() === "" ? null : parseFloat(rfInput) / 100;
+  const rf = rfParsed != null && !isNaN(rfParsed) ? rfParsed : null;
+
+  // Remember whether the holdings panel is collapsed, per browser.
+  useEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem(COLLAPSED_KEY) === "1");
+    } catch {}
+  }, []);
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      try {
+        localStorage.setItem(COLLAPSED_KEY, c ? "0" : "1");
+      } catch {}
+      return !c;
+    });
+  };
+
+  // Deep link to a tab, e.g. ?tab=evolution right after an import.
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    if (TABS.some((t) => t.value === requested)) setTab(requested as Tab);
+  }, []);
+
+  // Portfolios without holdings are built through trades: stay on that tab once the first one lands.
+  const empty = portfolio?.holdings.length === 0;
+  useEffect(() => {
+    if (empty) setTab("evolution");
+  }, [empty]);
 
   // Reset the editor whenever fresh data arrives and there are no local edits.
   useEffect(() => {
@@ -38,7 +88,8 @@ export default function PortfolioPage() {
   }, [portfolio, dirty]);
 
   const hasHoldings = (portfolio?.holdings.length ?? 0) > 0;
-  const analytics = useSWR<Analytics>(hasHoldings ? paths.analytics(id, period, rf != null && !isNaN(rf) ? rf : null) : null, fetcher, { revalidateOnFocus: false });
+  const analytics = useSWR<Analytics>(
+    hasHoldings && portfolio ? paths.analytics(id, period, rf, portfolio.benchmark) : null, fetcher, { revalidateOnFocus: false });
   const composition = useSWR<Composition>(hasHoldings ? paths.composition(id) : null, fetcher, { revalidateOnFocus: false });
 
   if (error) return <ErrorBox error={error} />;
@@ -53,8 +104,8 @@ export default function PortfolioPage() {
       const updated = await api.replaceHoldings(portfolio.id, toHoldings(rows));
       setDirty(false);
       await mutate(updated, { revalidate: false });
-      analytics.mutate();
-      composition.mutate();
+      // Every analytics view of this portfolio (performance, HRP, tearsheet) is now stale.
+      mutateAll((key) => typeof key === "string" && key.startsWith(`/portfolios/${portfolio.id}/`));
     } catch (err) {
       setSaveError(err);
     } finally {
@@ -65,6 +116,22 @@ export default function PortfolioPage() {
   const rename = async () => {
     if (name.trim() && name.trim() !== portfolio.name) await mutate(api.updatePortfolio(portfolio.id, { name: name.trim() }), { revalidate: false });
     setEditingName(false);
+  };
+
+  const duplicate = async () => {
+    setCopying(true);
+    try {
+      const copy = await api.copyPortfolio(portfolio.id);
+      mutateAll("/portfolios");
+      router.push(`/portfolios/${copy.id}`);
+    } catch (err) {
+      setSaveError(err);
+      setCopying(false);
+    }
+  };
+
+  const changeBenchmark = (benchmark: string) => {
+    if (benchmark !== portfolio.benchmark) mutate(api.updatePortfolio(portfolio.id, { benchmark }), { revalidate: false });
   };
 
   return (
@@ -89,23 +156,52 @@ export default function PortfolioPage() {
             {portfolio.description && ` · ${portfolio.description}`}
           </>
         }
+        actions={
+          <Button size="sm" onClick={duplicate} disabled={copying} title="Create a copy with the same holdings, description and benchmark">
+            {copying ? "Copying…" : "Duplicate"}
+          </Button>
+        }
       />
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(320px,380px)_1fr]">
-        <div className="flex flex-col gap-6">
+      <div className={collapsed ? "grid gap-6" : "grid gap-6 lg:grid-cols-[minmax(320px,380px)_1fr]"}>
+        {collapsed && (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-2.5">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Holdings</h2>
+            <span className="text-xs text-slate-500">
+              {portfolio.holdings.length} tickers · {pct(portfolio.total_weight, 1)}
+            </span>
+            <div className="flex min-w-0 flex-1 flex-wrap gap-1.5 overflow-hidden" style={{ maxHeight: 24 }}>
+              {portfolio.holdings.map((h) => (
+                <span key={h.id} className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[11px] text-slate-300">
+                  {h.ticker} {pct(h.weight, 1)}
+                </span>
+              ))}
+            </div>
+            {dirty && <span className="text-xs text-amber-400">Unsaved changes</span>}
+            <Button size="sm" onClick={toggleCollapsed} aria-expanded={false}>
+              Expand ▸
+            </Button>
+          </div>
+        )}
+        <div className={collapsed ? "hidden" : "flex flex-col gap-6"}>
           <Card
             title="Holdings"
             actions={
-              dirty && (
-                <div className="flex gap-2">
-                  <Button size="sm" variant="ghost" onClick={() => setDirty(false)}>
-                    Discard
-                  </Button>
-                  <Button size="sm" variant="primary" onClick={save} disabled={saving || !!validation}>
-                    {saving ? "Saving…" : "Save"}
-                  </Button>
-                </div>
-              )
+              <div className="flex gap-2">
+                {dirty && (
+                  <>
+                    <Button size="sm" variant="ghost" onClick={() => setDirty(false)}>
+                      Discard
+                    </Button>
+                    <Button size="sm" variant="primary" onClick={save} disabled={saving || !!validation}>
+                      {saving ? "Saving…" : "Save"}
+                    </Button>
+                  </>
+                )}
+                <Button size="sm" variant="ghost" onClick={toggleCollapsed} aria-expanded={true} title="Collapse to give the analytics the full width">
+                  ◂ Collapse
+                </Button>
+              </div>
             }
           >
             <HoldingsEditor
@@ -116,6 +212,12 @@ export default function PortfolioPage() {
               }}
             />
             {dirty && validation && <p className="mt-2 text-xs text-rose-400">{validation}</p>}
+            {portfolio.weights_as_of && (
+              <p className="mt-2 text-xs text-slate-500">
+                Weights follow the positions built from your trades at market prices of {portfolio.weights_as_of} and update each time the portfolio is opened.
+                {dirty && <span className="text-amber-400"> Saving manual weights turns them into fixed targets.</span>}
+              </p>
+            )}
             <div className="mt-2">
               <ErrorBox error={saveError} />
             </div>
@@ -126,13 +228,18 @@ export default function PortfolioPage() {
 
         <div className="flex min-w-0 flex-col gap-6">
           {!hasHoldings ? (
-            <Empty>Add holdings and save to see allocation, risk and performance analytics.</Empty>
+            <>
+              <Empty>Add holdings and save, or add trades below, to see allocation, risk and performance analytics.</Empty>
+              <EvolutionPanel portfolio={portfolio} />
+            </>
           ) : (
             <>
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <Segmented options={ANALYTICS_PERIODS} value={period} onChange={setPeriod} />
+                {/* The backtest tab has its own period (it allows longer histories). */}
+                {tab === "backtest" || tab === "evolution" ? <span /> : <Segmented options={ANALYTICS_PERIODS} value={period} onChange={setPeriod} />}
+                <BenchmarkPicker value={portfolio.benchmark} onChange={changeBenchmark} />
                 <label className="flex items-center gap-2 text-xs text-slate-400">
-                  Risk-free rate %
+                  <Term term="riskFree">Risk-free rate %</Term>
                   <Input
                     type="number"
                     step="any"
@@ -144,17 +251,45 @@ export default function PortfolioPage() {
                 </label>
               </div>
               {dirty && <p className="text-xs text-amber-400">Analytics reflect the saved holdings. Save to update them.</p>}
-              {analytics.isLoading && <Spinner label="Downloading prices and computing statistics…" />}
-              <ErrorBox error={analytics.error} />
-              {analytics.data && (
+              <div className="border-b border-slate-800">
+                <nav className="-mb-px flex gap-4">
+                  {TABS.map((t) => (
+                    <button
+                      key={t.value}
+                      onClick={() => setTab(t.value)}
+                      className={`border-b-2 px-1 pb-2 text-sm transition ${tab === t.value ? "border-sky-400 text-white" : "border-transparent text-slate-400 hover:text-slate-200"}`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </nav>
+              </div>
+
+              {tab === "evolution" && <EvolutionPanel portfolio={portfolio} />}
+              {tab === "performance" && (
                 <>
-                  <PortfolioStats a={analytics.data} />
-                  <GrowthChart a={analytics.data} />
-                  <AssetTable a={analytics.data} />
-                  <CorrelationMatrix a={analytics.data} />
+                  {analytics.isLoading && <Spinner label="Downloading prices and computing statistics…" />}
+                  <ErrorBox error={analytics.error} />
+                  {analytics.data?.benchmark_error && <p className="text-xs text-amber-400">{analytics.data.benchmark_error}</p>}
+                  {analytics.data && (
+                    <>
+                      <PortfolioStats a={analytics.data} />
+                      <GrowthChart a={analytics.data} />
+                      <AssetTable a={analytics.data} />
+                    </>
+                  )}
+                  {collapsed && composition.data && <AllocationCard composition={composition.data} />}
+                  {composition.data && <CompositionTable composition={composition.data} />}
                 </>
               )}
-              {composition.data && <CompositionTable composition={composition.data} />}
+              {tab === "rolling" && <TearsheetPanel portfolioId={portfolio.id} period={period} rf={rf} benchmark={portfolio.benchmark} />}
+              {tab === "hrp" &&
+                (portfolio.holdings.length < 2 ? (
+                  <Empty>Hierarchical Risk Parity needs at least two holdings.</Empty>
+                ) : (
+                  <HrpPanel portfolioId={portfolio.id} period={period} rf={rf} />
+                ))}
+              {tab === "backtest" && <BacktestPanel target={{ type: "portfolio", portfolio_id: portfolio.id }} benchmark={portfolio.benchmark} rf={rf} />}
             </>
           )}
         </div>
@@ -231,9 +366,9 @@ function CompositionTable({ composition }: { composition: Composition }) {
               <th className="pb-2 text-left font-medium">Name</th>
               <th className="pb-2 text-left font-medium">Sector</th>
               <th className="pb-2 font-medium">Price</th>
-              <th className="pb-2 font-medium">Market cap</th>
-              <th className="pb-2 font-medium">P/E</th>
-              <th className="pb-2 font-medium">Beta</th>
+              <th className="pb-2 font-medium"><Term term="marketCap">Market cap</Term></th>
+              <th className="pb-2 font-medium"><Term term="pe">P/E</Term></th>
+              <th className="pb-2 font-medium"><Term text="Sensitivity of the stock to the overall market (as reported by Yahoo, usually vs the S&P 500 over 5 years of monthly returns).">Beta</Term></th>
               <th className="pb-2 font-medium" />
             </tr>
           </thead>
@@ -248,7 +383,7 @@ function CompositionTable({ composition }: { composition: Composition }) {
                 <td>{num(h.trailing_pe, 1)}</td>
                 <td>{num(h.beta)}</td>
                 <td className="whitespace-nowrap pl-3 text-xs">
-                  <Link href={`/fundamentals?ticker=${encodeURIComponent(h.ticker)}`} className="text-sky-400 hover:underline">
+                  <Link href={`/stocks?ticker=${encodeURIComponent(h.ticker)}#fundamentals`} className="text-sky-400 hover:underline">
                     Fundamentals
                   </Link>
                 </td>

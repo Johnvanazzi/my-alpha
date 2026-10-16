@@ -1,14 +1,16 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { useState } from "react";
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import useSWR from "swr";
-import { tooltipStyle } from "@/components/AnalyticsView";
-import { StockHeader, useTicker } from "@/components/StockHeader";
-import { Card, Empty, ErrorBox, PageHeader, Segmented, Spinner, Stat } from "@/components/ui";
+import { tooltipStyle } from "./AnalyticsView";
+import { InfoTip, Term } from "./InfoTip";
+import { ScoreCard } from "./ScoreCard";
+import { Card, Empty, ErrorBox, Segmented, Spinner, Stat } from "./ui";
 import { fetcher, paths } from "@/lib/api";
 import { compact, compactMoney, money, num, pct, signColor } from "@/lib/format";
-import type { FundamentalPeriod, Fundamentals, MetricDef } from "@/lib/types";
+import { FACTOR_TERM, METRIC_TERM } from "@/lib/glossary";
+import type { FundamentalPeriod, Fundamentals, FundamentalScores, MetricDef } from "@/lib/types";
 
 type Frequency = "annual" | "quarterly";
 
@@ -26,42 +28,35 @@ function formatMetric(v: number | null | undefined, m: MetricDef, currency: stri
   return compactMoney(v, currency);
 }
 
-function FundamentalsView() {
-  const [ticker, setTicker] = useTicker();
+export function FundamentalsSection({ ticker }: { ticker: string }) {
   const [frequency, setFrequency] = useState<Frequency>("annual");
-  const { data, error, isLoading } = useSWR<Fundamentals>(ticker ? paths.fundamentals(ticker, frequency) : null, fetcher, {
+  const { data, error, isLoading } = useSWR<Fundamentals>(paths.fundamentals(ticker, frequency), fetcher, {
     revalidateOnFocus: false,
     keepPreviousData: true,
   });
+
+  const score = useSWR<FundamentalScores>(paths.fundamentalScore(ticker), fetcher, { revalidateOnFocus: false });
 
   const rows: FundamentalPeriod[] = data?.periods.map((p) => ({ ...p, label: periodLabel(p.period, data.frequency) })) ?? [];
   const cur = data?.currency ?? null;
   const ttm = data?.ttm;
 
   return (
-    <>
-      <StockHeader ticker={ticker} onTicker={setTicker} />
-      {!ticker && (
-        <>
-          <PageHeader title="Fundamentals" subtitle="Revenue, gross profit, EBITDA and earnings per share from the company's financial reports." />
-          <Empty>Search for a ticker to load its financial statements.</Empty>
-        </>
-      )}
-      {ticker && (
-        <div className="flex flex-col gap-6">
+    <div className="grid items-start gap-6 xl:grid-cols-[1fr_340px]">
+        <div className="flex min-w-0 flex-col gap-6">
           <ErrorBox error={error} />
           {isLoading && !data && <Spinner label="Loading financial statements…" />}
 
           {ttm && (
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
-              <Stat label="EPS (TTM)" value={money(ttm.eps, cur)} hint={`Forward ${money(ttm.forward_eps, cur)}`} />
-              <Stat label="Revenue (TTM)" value={compactMoney(ttm.revenue, cur)} hint={<span className={signColor(ttm.revenue_growth)}>{pct(ttm.revenue_growth, 1)} YoY</span>} />
-              <Stat label="Gross profit (TTM)" value={compactMoney(ttm.gross_profit, cur)} />
-              <Stat label="EBITDA (TTM)" value={compactMoney(ttm.ebitda, cur)} />
-              <Stat label="Gross margin" value={pct(ttm.gross_margin, 1)} />
-              <Stat label="EBITDA margin" value={pct(ttm.ebitda_margin, 1)} />
-              <Stat label="Net margin" value={pct(ttm.profit_margin, 1)} />
-              <Stat label="P/E" value={num(ttm.trailing_pe, 1)} hint={`Forward ${num(ttm.forward_pe, 1)}`} />
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <Stat term="epsTtm" label="EPS (TTM)" value={money(ttm.eps, cur)} hint={`Forward ${money(ttm.forward_eps, cur)}`} />
+              <Stat term="revenue" label="Revenue (TTM)" value={compactMoney(ttm.revenue, cur)} hint={<span className={signColor(ttm.revenue_growth)}>{pct(ttm.revenue_growth, 1)} YoY</span>} />
+              <Stat term="grossProfit" label="Gross profit (TTM)" value={compactMoney(ttm.gross_profit, cur)} />
+              <Stat term="ebitda" label="EBITDA (TTM)" value={compactMoney(ttm.ebitda, cur)} />
+              <Stat term="grossMargin" label="Gross margin" value={pct(ttm.gross_margin, 1)} />
+              <Stat term="ebitdaMargin" label="EBITDA margin" value={pct(ttm.ebitda_margin, 1)} />
+              <Stat term="netMargin" label="Net margin" value={pct(ttm.profit_margin, 1)} />
+              <Stat term="pe" label="P/E" value={num(ttm.trailing_pe, 1)} hint={`Forward ${num(ttm.forward_pe, 1)}`} />
             </div>
           )}
 
@@ -76,7 +71,10 @@ function FundamentalsView() {
                   value={frequency}
                   onChange={setFrequency}
                 />
-                <span className="text-xs text-slate-500">Values in {cur ?? "reporting currency"}</span>
+                <span className="inline-flex items-center text-xs text-slate-500">
+                  Values in {cur ?? "reporting currency"}
+                  <InfoTip term="ttm" />
+                </span>
               </div>
 
               {rows.length === 0 ? (
@@ -84,7 +82,7 @@ function FundamentalsView() {
               ) : (
                 <>
                   <div className="grid gap-6 lg:grid-cols-2">
-                    <Card title="Revenue, gross profit & EBITDA">
+                    <Card title={<>Revenue, gross profit &amp; EBITDA<InfoTip term="ebitda" /></>}>
                       <div className="h-72">
                         <ResponsiveContainer>
                           <BarChart data={rows} margin={{ top: 5, right: 8, bottom: 0, left: 0 }}>
@@ -101,7 +99,7 @@ function FundamentalsView() {
                       </div>
                     </Card>
 
-                    <Card title="Earnings per share">
+                    <Card title={<>Earnings per share<InfoTip term="epsDiluted" /></>}>
                       <div className="h-72">
                         <ResponsiveContainer>
                           <BarChart data={rows} margin={{ top: 5, right: 8, bottom: 0, left: 0 }}>
@@ -119,7 +117,7 @@ function FundamentalsView() {
                     </Card>
                   </div>
 
-                  <Card title="Margins">
+                  <Card title={<>Margins<InfoTip term="grossMargin" /></>}>
                     <div className="h-64">
                       <ResponsiveContainer>
                         <LineChart data={rows} margin={{ top: 5, right: 8, bottom: 0, left: 0 }}>
@@ -153,7 +151,7 @@ function FundamentalsView() {
                           {data.metrics.map((m) => (
                             <tr key={m.key} className="border-t border-slate-800 text-right">
                               <td className="py-2 text-left text-slate-300">
-                                {m.label}
+                                <Term term={METRIC_TERM[m.key]}>{m.label}</Term>
                                 {m.key.endsWith("_growth") && <span className="ml-1 text-xs text-slate-500">vs prior period</span>}
                               </td>
                               {rows.map((r) => (
@@ -178,15 +176,22 @@ function FundamentalsView() {
             </>
           )}
         </div>
-      )}
-    </>
-  );
-}
-
-export default function FundamentalsPage() {
-  return (
-    <Suspense fallback={<Spinner />}>
-      <FundamentalsView />
-    </Suspense>
+        <div className="flex flex-col gap-6 xl:sticky xl:top-28">
+          <ErrorBox error={score.error} />
+          {score.isLoading && !score.data && <Spinner label="Scoring fundamentals…" />}
+          {score.data && (
+            <ScoreCard
+              scores={score.data}
+              title="Fundamental score"
+              term="fundamentalScore"
+              itemTerms={FACTOR_TERM}
+              scale={["Weak", "Neutral", "Strong"]}
+              asOf={score.data.fiscal_year_end ? `TTM · FY ${score.data.fiscal_year_end}` : "TTM"}
+              groups={score.data.groups}
+              emptyText="No factors could be scored."
+            />
+          )}
+        </div>
+    </div>
   );
 }
