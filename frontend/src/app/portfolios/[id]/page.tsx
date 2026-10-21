@@ -8,6 +8,7 @@ import useSWR, { useSWRConfig } from "swr";
 import { AssetTable, GrowthChart, PortfolioStats, tooltipStyle } from "@/components/AnalyticsView";
 import { BacktestPanel } from "@/components/BacktestPanel";
 import { EvolutionPanel } from "@/components/EvolutionView";
+import { FamaMacbethPanel } from "@/components/FamaMacbethView";
 import { HrpPanel } from "@/components/HrpView";
 import { TearsheetPanel } from "@/components/TearsheetView";
 import { BenchmarkPicker } from "@/components/BenchmarkPicker";
@@ -15,15 +16,17 @@ import { Term } from "@/components/InfoTip";
 import { HoldingsEditor, type HoldingRow, toHoldings, toRows, validateRows } from "@/components/HoldingsEditor";
 import { Button, Card, Empty, ErrorBox, Input, PageHeader, Segmented, Spinner } from "@/components/ui";
 import { api, fetcher, paths } from "@/lib/api";
+import { invalidatePortfolio } from "@/lib/onDemand";
 import { compactMoney, num, PALETTE, pct, PERIODS } from "@/lib/format";
 import type { Analytics, Composition, Portfolio } from "@/lib/types";
 
-type Tab = "evolution" | "performance" | "rolling" | "hrp" | "backtest";
+type Tab = "evolution" | "performance" | "rolling" | "hrp" | "famaMacbeth" | "backtest";
 const TABS: { value: Tab; label: string }[] = [
   { value: "evolution", label: "Evolution" },
   { value: "performance", label: "Performance" },
   { value: "rolling", label: "Rolling & drawdowns" },
   { value: "hrp", label: "Risk parity (HRP)" },
+  { value: "famaMacbeth", label: "Fama-MacBeth" },
   { value: "backtest", label: "Backtest" },
 ];
 
@@ -104,8 +107,8 @@ export default function PortfolioPage() {
       const updated = await api.replaceHoldings(portfolio.id, toHoldings(rows));
       setDirty(false);
       await mutate(updated, { revalidate: false });
-      // Every analytics view of this portfolio (performance, HRP, tearsheet) is now stale.
-      mutateAll((key) => typeof key === "string" && key.startsWith(`/portfolios/${portfolio.id}/`));
+      // Every analytics view of this portfolio (performance, HRP, tearsheet, Fama-MacBeth) is now stale.
+      invalidatePortfolio(mutateAll, portfolio.id);
     } catch (err) {
       setSaveError(err);
     } finally {
@@ -288,6 +291,12 @@ export default function PortfolioPage() {
                   <Empty>Hierarchical Risk Parity needs at least two holdings.</Empty>
                 ) : (
                   <HrpPanel portfolioId={portfolio.id} period={period} rf={rf} />
+                ))}
+              {tab === "famaMacbeth" &&
+                (portfolio.holdings.length < 3 ? (
+                  <Empty>Fama-MacBeth regresses returns across holdings each day, so it needs at least three holdings.</Empty>
+                ) : (
+                  <FamaMacbethPanel portfolioId={portfolio.id} holdings={portfolio.holdings.length} period={period} rf={rf} benchmark={portfolio.benchmark} />
                 ))}
               {tab === "backtest" && <BacktestPanel target={{ type: "portfolio", portfolio_id: portfolio.id }} benchmark={portfolio.benchmark} rf={rf} />}
             </>

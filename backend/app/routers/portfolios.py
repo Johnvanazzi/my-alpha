@@ -23,7 +23,7 @@ from app.schemas import (
     TransactionOut,
     TransactionPage,
 )
-from app.services import hrp, portfolio_analytics, tearsheet, transactions
+from app.services import fama_macbeth, hrp, portfolio_analytics, tearsheet, transactions
 from app.services.market_data import MarketDataError, get_split_adjusted_history
 
 router = APIRouter(prefix="/portfolios", tags=["portfolios"])
@@ -467,3 +467,18 @@ def portfolio_tearsheet(
     """pyfolio analysis: rolling volatility/beta/Sharpe, underwater curve, drawdowns, monthly returns."""
     portfolio = _get(db, portfolio_id)
     return tearsheet.tearsheet(_weights(portfolio), period, benchmark or portfolio.benchmark, window, risk_free_rate)
+
+
+@router.get("/{portfolio_id}/fama-macbeth")
+def portfolio_fama_macbeth(
+    portfolio_id: int,
+    period: str = "2y",
+    factors: list[str] = Query(list(fama_macbeth.DEFAULT_FACTORS), description=f"Any of: {', '.join(fama_macbeth.FACTORS)}"),
+    window: int = Query(fama_macbeth.DEFAULT_WINDOW, description="Trailing window for the exposures, in trading days"),
+    risk_free_rate: float | None = Query(None, description="Annual rate as a fraction; defaults to ^IRX"),
+    benchmark: str | None = Query(None, description="Override the portfolio's saved benchmark (the market factor)"),
+    db: Session = Depends(get_db),
+):
+    """Fama-MacBeth two-pass regressions: premia earned per unit of beta/momentum/volatility across the holdings."""
+    portfolio = _get(db, portfolio_id)
+    return fama_macbeth.fama_macbeth(_weights(portfolio), period, benchmark or portfolio.benchmark, factors, window, risk_free_rate)

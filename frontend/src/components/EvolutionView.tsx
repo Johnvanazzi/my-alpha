@@ -6,6 +6,7 @@ import { Area, AreaChart, CartesianGrid, Legend, Line, LineChart, ResponsiveCont
 import useSWR, { useSWRConfig } from "swr";
 import { api, fetcher, paths } from "@/lib/api";
 import { compact, money, num, PALETTE, pct, signColor } from "@/lib/format";
+import { invalidatePortfolio } from "@/lib/onDemand";
 import type { Evolution, ImportSummary, Portfolio, Transaction, TransactionPage } from "@/lib/types";
 import { tooltipStyle } from "./AnalyticsView";
 import { Button, Card, Empty, ErrorBox, Field, Input, Pager, Select, Spinner, Stat } from "./ui";
@@ -48,7 +49,7 @@ function usePortfolioRefresh(portfolioId: number) {
   const { mutate } = useSWRConfig();
   return (updated: Portfolio) => {
     mutate(paths.portfolio(portfolioId), updated, { revalidate: false });
-    mutate((key) => typeof key === "string" && key.startsWith(`/portfolios/${portfolioId}/`));
+    invalidatePortfolio(mutate, portfolioId);
     mutate("/portfolios");
   };
 }

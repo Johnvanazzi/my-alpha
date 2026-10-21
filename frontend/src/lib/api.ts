@@ -82,6 +82,8 @@ export const paths = {
     `/portfolios/${id}/hrp?period=${period}&linkage=${linkage}${rf == null ? "" : `&risk_free_rate=${rf}`}`,
   tearsheet: (id: number | string, period: string, window: number, rf: number | null, benchmark: string) =>
     `/portfolios/${id}/tearsheet?period=${period}&window=${window}&benchmark=${enc(benchmark)}${rf == null ? "" : `&risk_free_rate=${rf}`}`,
+  famaMacbeth: (id: number | string, period: string, factors: string[], window: number, rf: number | null, benchmark: string) =>
+    `/portfolios/${id}/fama-macbeth?period=${period}${factors.map((f) => `&factors=${f}`).join("")}&window=${window}&benchmark=${enc(benchmark)}${rf == null ? "" : `&risk_free_rate=${rf}`}`,
   indicators: "/market/indicators",
   profile: (t: string) => `/market/${enc(t)}/profile`,
   chart: (t: string, period: string, interval: string, specs: string[]) =>

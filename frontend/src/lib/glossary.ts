@@ -57,6 +57,27 @@ export const GLOSSARY = {
     title: "Clustered correlation",
     text: "Correlation of daily returns, re-ordered by HRP's clustering (quasi-diagonalisation). Blocks of red along the diagonal are groups of holdings that move together, so they diversify each other little.",
   },
+  famaMacbeth: {
+    title: "Fama-MacBeth regression",
+    text: "Two-pass test of which exposures were rewarded (Fama & MacBeth, 1973). Pass 1 measures each holding's exposure every day from the trailing window ending the day before (no look-ahead). Pass 2 regresses that day's excess returns of all holdings on their exposures. The average of the daily slopes is the premium per unit of exposure, and its t-stat comes from how much the slopes vary over time. With only a few holdings each regression is small: treat it as a description of your holdings, not proof that a factor is priced.",
+  },
+  fmPremium: {
+    title: "Risk premium (λ)",
+    text: "Average daily cross-sectional slope, annualised (× 252). For beta it is the extra annual return per 1.0 of beta; for momentum and volatility (z-scored across the holdings each day) it is per 1 standard deviation above the holdings' average. The intercept is the return left unexplained by the exposures.",
+  },
+  fmTStat: {
+    title: "t-stat",
+    text: "Average slope divided by its standard error (standard deviation of the daily slopes / √days). |t| above about 2 is significant at 5%. The Newey-West version widens the error for autocorrelation in the slopes, which overlapping exposure windows create, so it is the one to trust.",
+  },
+  fmExposures: {
+    title: "Exposures",
+    text: "Each holding's exposure on the last day: beta to the benchmark, momentum (total return over the window) and annualised volatility, all measured on the trailing window. The portfolio row is the weighted average.",
+  },
+  fmAlpha: {
+    title: "Pricing error (α)",
+    text: "Average annual excess return minus what the premia × exposures predict: the part of a holding's return the factors don't explain. With equal weights the portfolio's α is zero by construction, because the intercept absorbs the average.",
+  },
+  fmR2: { title: "Average R²", text: "Mean share of the daily cross-sectional variation in returns explained by the exposures." },
   rollingWindow: { title: "Rolling window", text: "Number of trading days each rolling statistic looks back over. pyfolio's default is 6 months (126 days)." },
   rollingVolatility: {
     title: "Rolling volatility",

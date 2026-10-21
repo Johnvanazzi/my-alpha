@@ -1,13 +1,13 @@
 "use client";
 
 import { Fragment, useState } from "react";
-import useSWR from "swr";
-import { fetcher, paths } from "@/lib/api";
+import { paths } from "@/lib/api";
 import { num, pct, signColor } from "@/lib/format";
+import { useOnDemand } from "@/lib/onDemand";
 import type { HrpResult, Linkage, Stats } from "@/lib/types";
 import { sharpeColor } from "./AnalyticsView";
 import { InfoTip, Term } from "./InfoTip";
-import { Card, ErrorBox, Segmented, Spinner } from "./ui";
+import { Card, ErrorBox, RunButton, RunPrompt, Segmented, Spinner } from "./ui";
 
 const LINKAGES: { value: Linkage; label: string }[] = [
   { value: "single", label: "Single" },
@@ -221,10 +221,7 @@ function WeightBars({ data }: { data: HrpResult }) {
 
 export function HrpPanel({ portfolioId, period, rf }: { portfolioId: number | string; period: string; rf: number | null }) {
   const [linkage, setLinkage] = useState<Linkage>("single");
-  const { data, error, isLoading, isValidating } = useSWR<HrpResult>(paths.hrp(portfolioId, period, linkage, rf), fetcher, {
-    revalidateOnFocus: false,
-    keepPreviousData: true,
-  });
+  const { data, error, isLoading, isValidating, run, ran, stale } = useOnDemand<HrpResult>(paths.hrp(portfolioId, period, linkage, rf));
 
   return (
     <div className="flex flex-col gap-6">
@@ -236,12 +233,14 @@ export function HrpPanel({ portfolioId, period, rf }: { portfolioId: number | st
         <div className="flex items-center gap-2 text-xs text-slate-400">
           <Term term="linkage">Linkage</Term>
           <Segmented options={LINKAGES} value={linkage} onChange={setLinkage} />
+          <RunButton ran={ran} stale={stale} busy={isValidating} onRun={() => run()} />
         </div>
       </div>
       <ErrorBox error={error} />
+      {!ran && <RunPrompt onRun={() => run()}>Clusters the holdings by correlation and computes the HRP weights over the selected period.</RunPrompt>}
       {isLoading && !data && <Spinner label="Clustering holdings…" />}
       {data && (
-        <div className={isValidating ? "flex flex-col gap-6 opacity-60 transition" : "flex flex-col gap-6 transition"}>
+        <div className={isValidating || stale ? "flex flex-col gap-6 opacity-60 transition" : "flex flex-col gap-6 transition"}>
           <Card term="clusteredCorrelation" title="Clustered correlation & dendrogram">
             <ClusteredCorrelation data={data} />
             <p className="mt-3 flex items-center text-xs text-slate-500">

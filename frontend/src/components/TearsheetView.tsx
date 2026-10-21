@@ -2,14 +2,14 @@
 
 import { useMemo, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import useSWR from "swr";
-import { fetcher, paths } from "@/lib/api";
+import { paths } from "@/lib/api";
 import { num, pct, signColor } from "@/lib/format";
 import type { GlossaryKey } from "@/lib/glossary";
+import { useOnDemand } from "@/lib/onDemand";
 import type { Tearsheet } from "@/lib/types";
 import { tooltipStyle } from "./AnalyticsView";
 import { InfoTip, Term } from "./InfoTip";
-import { Card, ErrorBox, Segmented, Spinner, Stat } from "./ui";
+import { Card, ErrorBox, RunButton, RunPrompt, Segmented, Spinner, Stat } from "./ui";
 
 const WINDOWS = [
   { value: "21", label: "1M" },
@@ -96,10 +96,7 @@ export function MonthlyHeatmap({ data }: { data: Tearsheet["monthly_returns"] })
 
 export function TearsheetPanel({ portfolioId, period, rf, benchmark }: { portfolioId: number | string; period: string; rf: number | null; benchmark: string }) {
   const [rollingWindow, setRollingWindow] = useState("126");
-  const { data, error, isLoading, isValidating } = useSWR<Tearsheet>(paths.tearsheet(portfolioId, period, Number(rollingWindow), rf, benchmark), fetcher, {
-    revalidateOnFocus: false,
-    keepPreviousData: true,
-  });
+  const { data, error, isLoading, isValidating, run, ran, stale } = useOnDemand<Tearsheet>(paths.tearsheet(portfolioId, period, Number(rollingWindow), rf, benchmark));
 
   const monthly = useMemo(() => (data?.monthly_returns ?? []).map((m) => m.return).filter((v): v is number => v != null), [data]);
   const bins = useMemo(() => histogram(monthly), [monthly]);
@@ -116,13 +113,15 @@ export function TearsheetPanel({ portfolioId, period, rf, benchmark }: { portfol
         <div className="flex items-center gap-2 text-xs text-slate-400">
           <Term term="rollingWindow">Rolling window</Term>
           <Segmented options={WINDOWS} value={rollingWindow} onChange={setRollingWindow} />
+          <RunButton ran={ran} stale={stale} busy={isValidating} onRun={() => run()} />
         </div>
       </div>
       <ErrorBox error={error} />
       {data?.benchmark_error && <p className="text-xs text-amber-400">{data.benchmark_error}</p>}
+      {!ran && <RunPrompt onRun={() => run()}>Computes rolling volatility, beta and Sharpe, drawdowns and monthly returns with pyfolio.</RunPrompt>}
       {isLoading && !data && <Spinner label="Running pyfolio analysis…" />}
       {data && !error && (
-        <div className={isValidating ? "flex flex-col gap-6 opacity-60 transition" : "flex flex-col gap-6 transition"}>
+        <div className={isValidating || stale ? "flex flex-col gap-6 opacity-60 transition" : "flex flex-col gap-6 transition"}>
           <div className="grid gap-6 xl:grid-cols-2">
             <ChartCard term="rollingVolatility" title={`Rolling volatility (${WINDOWS.find((w) => w.value === rollingWindow)?.label})`}>
               <LineChart data={data.rolling} syncId="tearsheet" margin={{ top: 5, right: 8, bottom: 0, left: 0 }}>

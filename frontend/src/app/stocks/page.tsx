@@ -40,7 +40,8 @@ function StockView() {
           </section>
           <section>
             <SectionTitle id="forecast" title="Forecast" subtitle="ARIMA price forecast (up to 20 trading days) and GARCH volatility study." />
-            <ForecastSection ticker={ticker} />
+            {/* Keyed so a new ticker starts with nothing run instead of the previous ticker's forecast. */}
+            <ForecastSection key={ticker} ticker={ticker} />
           </section>
           <section>
             <SectionTitle id="backtest" title="Backtest" subtitle="Test a trading rule on this stock's history against buy and hold and a benchmark." />

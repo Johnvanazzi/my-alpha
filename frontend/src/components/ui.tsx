@@ -151,6 +151,30 @@ export function Pager({ page, pages, onPage }: { page: number; pages: number; on
   );
 }
 
+/** Run control for calculations that only run on request (see useOnDemand). */
+export function RunButton({ ran, stale, busy, onRun }: { ran: boolean; stale: boolean; busy: boolean; onRun: () => void }) {
+  return (
+    <span className="flex items-center gap-2">
+      {stale && <span className="text-xs text-amber-400">Settings changed</span>}
+      <Button size="sm" variant={!ran || stale ? "primary" : "secondary"} onClick={onRun} disabled={busy}>
+        {busy ? "Running…" : ran && !stale ? "Re-run" : "Run"}
+      </Button>
+    </span>
+  );
+}
+
+/** Placeholder shown before an on-demand calculation has been run. */
+export function RunPrompt({ children, onRun }: { children: ReactNode; onRun: () => void }) {
+  return (
+    <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-slate-800 px-4 py-8 text-center text-sm text-slate-500">
+      <p className="max-w-lg">{children}</p>
+      <Button variant="primary" onClick={onRun}>
+        Run
+      </Button>
+    </div>
+  );
+}
+
 export function Spinner({ label = "Loading…" }: { label?: string }) {
   return (
     <div className="flex items-center gap-2 py-6 text-sm text-slate-400">

@@ -337,6 +337,52 @@ export interface HrpResult {
   dendrogram: { x: number[]; y: (number | null)[] }[];
 }
 
+export type FmFactor = "beta" | "momentum" | "volatility";
+
+export interface FmPremium {
+  name: "intercept" | FmFactor;
+  mean_daily: number | null;
+  annualized: number | null;
+  std_error: number | null;
+  t_stat: number | null;
+  p_value: number | null;
+  t_stat_nw: number | null;
+  p_value_nw: number | null;
+  nw_lags: number;
+  positive_share: number | null;
+}
+
+export interface FamaMacbeth {
+  period: string;
+  benchmark: string | null;
+  factors: FmFactor[];
+  window: number;
+  risk_free_rate: number;
+  start: string;
+  end: string;
+  exposures_as_of: string;
+  periods: number;
+  holdings: number;
+  avg_r2: number | null;
+  premia: FmPremium[];
+  /** Running sum of the daily slopes, one key per premium name. */
+  cumulative: ({ date: string } & Record<string, number | null>)[];
+  assets: {
+    ticker: string;
+    weight: number;
+    exposures: Partial<Record<FmFactor, number | null>>;
+    excess_return: number | null;
+    fitted_return: number | null;
+    alpha: number | null;
+  }[];
+  portfolio: {
+    exposures: Partial<Record<FmFactor, number | null>>;
+    excess_return: number | null;
+    fitted_return: number | null;
+    alpha: number | null;
+  };
+}
+
 export interface Tearsheet {
   period: string;
   window: number;

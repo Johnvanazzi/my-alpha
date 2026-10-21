@@ -39,6 +39,8 @@ uv run uvicorn app.main:app --reload   # run the API outside Docker (needs Postg
   - *Performance*: Sharpe, Sortino, volatility, max drawdown, beta and growth vs the benchmark, per-holding risk contribution, and allocation by holding, sector and country. The risk-free rate defaults to the 13-week T-bill (`^IRX`) and can be overridden.
   - *Rolling & drawdowns* ([pyfolio-reloaded](https://github.com/stefan-jansen/pyfolio-reloaded)): rolling volatility, beta and Sharpe vs the benchmark, the underwater plot, the worst-drawdowns table, and the distribution and heatmap of monthly returns.
   - *Risk parity* ([PyPortfolioOpt](https://github.com/robertmartin8/PyPortfolioOpt) `HRPOpt`): Hierarchical Risk Parity weights compared with the current ones, the correlation matrix clustered in HRP order with its dendrogram (hover a cell to see both tickers, the correlation and their weights), and an in-sample backtest of both.
+  - *Fama-MacBeth*: two-pass regressions across the holdings. Each day, exposures measured on a trailing 1M/3M/6M window ending the day before (beta to the benchmark, and optionally momentum and volatility, z-scored across holdings) explain that day's excess returns in one cross-sectional regression. Shows the annualised premium per factor with plain and Newey-West t-stats, the cumulative daily premia, and each holding's exposures, explained return and pricing error (alpha). Needs at least two more holdings than factors.
+  - Rolling & drawdowns, Risk parity and Fama-MacBeth only compute when you press *Run* (as do ARIMA and GARCH on the stock page); changing their settings marks the result as stale until you run again, and settings already computed show again instantly.
   - *Backtest*: allocation strategies replayed with [bt](https://github.com/pmorissette/bt) (see **Backtests** below).
 - **Transaction import**: create a portfolio from B3's *Negociação* export (Área do Investidor → Extratos → Negociação → Excel). The open positions become the holdings, weighted by market value; weights are re-priced every time the portfolio is opened. Re-import a newer statement from the *Evolution* tab, or add and delete individual trades there (any portfolio, including a new empty one; B3 codes such as `PETR4` or `MGLU3F` and any Yahoo symbol are accepted, and the price defaults to that day's close). Sales larger than the shares held at that date are rejected. Adding trades to a portfolio with hand-set weights leaves those weights alone until you sync. Editing weights by hand turns them into fixed targets; *Sync weights to positions* switches back.
 - **Screener**: Yahoo presets (gainers, most active, undervalued…) or custom screens with 26 range filters in six groups: valuation (market cap, P/E, PEG, P/B, P/S, EV/EBITDA), profitability (ROE, ROA, margins), growth, dividends, risk & leverage (beta, D/E, net debt/EBITDA, current ratio, short interest) and trading. Also region, sector and an OTC exclusion. Results are paginated server-side (25/50/100 per page) and sortable by column. Filters are declared once in `services/screener.py` (`RANGE_FILTERS`) and the form is built from that metadata.
@@ -62,7 +64,7 @@ backend/app/
   main.py                    FastAPI app, error handlers
   migrate.py, migrations/    Alembic migrations, applied automatically on startup
   models.py, schemas.py      Portfolio/Holding ORM models and API schemas
-  routers/                   portfolios (CRUD + analytics, hrp, tearsheet), market (chart/score/search/screener), analysis (fundamentals, compare), backtests
+  routers/                   portfolios (CRUD + analytics, hrp, tearsheet, fama-macbeth), market (chart/score/search/screener), analysis (fundamentals, compare), backtests
   services/
     market_data.py           every yfinance call, with an in-memory TTL cache
     indicators.py            indicator registry: add new indicators here
@@ -70,6 +72,7 @@ backend/app/
     portfolio_analytics.py   returns/risk statistics shared by the portfolio views
     transactions.py          B3 statement parser; replays transactions into positions, weights and their evolution
     hrp.py                   Hierarchical Risk Parity (PyPortfolioOpt)
+    fama_macbeth.py          Fama-MacBeth cross-sectional risk premia across the holdings
     tearsheet.py             rolling metrics, drawdowns, monthly returns (pyfolio)
     backtest/                strategy registry, stock engine (pandas), portfolio engine (bt), shared results
     forecasting.py           ARIMA forecasts + backtest (statsmodels), GARCH volatility (arch)

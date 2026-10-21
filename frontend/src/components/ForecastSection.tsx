@@ -2,13 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Area, CartesianGrid, ComposedChart, Legend, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import useSWR from "swr";
-import { fetcher, paths } from "@/lib/api";
+import { paths } from "@/lib/api";
 import { money, num, pct, signColor } from "@/lib/format";
+import { useOnDemand } from "@/lib/onDemand";
 import type { ArimaResult, GarchDist, GarchResult, ModelParam } from "@/lib/types";
 import { tooltipStyle } from "./AnalyticsView";
 import { InfoTip, Term } from "./InfoTip";
-import { Button, Card, cx, ErrorBox, Field, Select, Segmented, Spinner, Stat } from "./ui";
+import { Button, Card, cx, ErrorBox, Field, RunButton, RunPrompt, Select, Segmented, Spinner, Stat } from "./ui";
 
 const MAX_HORIZON = 20;
 const axisTick = { fill: "#64748b", fontSize: 11 };
@@ -144,10 +144,12 @@ function ArimaPanel({ ticker, horizon, period }: { ticker: string; horizon: numb
   const [manual, setManual] = useState(false);
   const [draft, setDraft] = useState<[number, number, number]>([1, 0, 1]);
   const [order, setOrder] = useState<string | null>(null);
-  const { data, error, isLoading, isValidating } = useSWR<ArimaResult>(paths.arima(ticker, horizon, period, order), fetcher, {
-    revalidateOnFocus: false,
-    keepPreviousData: true,
-  });
+  const { data, error, isLoading, isValidating, run, ran, stale } = useOnDemand<ArimaResult>(paths.arima(ticker, horizon, period, order));
+  // Fitting a manual order is an explicit request: run it straight away.
+  const fit = (o: string) => {
+    setOrder(o);
+    run(paths.arima(ticker, horizon, period, o));
+  };
 
   return (
     <>
@@ -156,6 +158,9 @@ function ArimaPanel({ ticker, horizon, period }: { ticker: string; horizon: numb
         error={error}
         loading={isLoading && !data}
         validating={isValidating}
+        ran={ran}
+        stale={stale}
+        run={() => run()}
         horizon={horizon}
         manual={manual}
         setManual={setManual}
@@ -163,8 +168,9 @@ function ArimaPanel({ ticker, horizon, period }: { ticker: string; horizon: numb
         setDraft={setDraft}
         order={order}
         setOrder={setOrder}
+        fit={fit}
       />
-      {data?.backtest && <Backtest b={data.backtest} />}
+      {data?.backtest && !stale && <Backtest b={data.backtest} />}
     </>
   );
 }
@@ -174,6 +180,9 @@ interface ArimaCardProps {
   error: unknown;
   loading: boolean;
   validating: boolean;
+  ran: boolean;
+  stale: boolean;
+  run: () => void;
   horizon: number;
   manual: boolean;
   setManual: (v: boolean) => void;
@@ -181,9 +190,10 @@ interface ArimaCardProps {
   setDraft: React.Dispatch<React.SetStateAction<[number, number, number]>>;
   order: string | null;
   setOrder: (v: string | null) => void;
+  fit: (order: string) => void;
 }
 
-function ArimaCard({ data, error, loading, validating: isValidating, horizon, manual, setManual, draft, setDraft, order, setOrder }: ArimaCardProps) {
+function ArimaCard({ data, error, loading, validating: isValidating, ran, stale, run, horizon, manual, setManual, draft, setDraft, order, setOrder, fit }: ArimaCardProps) {
   const end = data?.forecast.at(-1);
 
   return (
@@ -210,7 +220,7 @@ function ArimaCard({ data, error, loading, validating: isValidating, horizon, ma
               className="flex items-center gap-1"
               onSubmit={(e) => {
                 e.preventDefault();
-                setOrder(draft.join(","));
+                fit(draft.join(","));
               }}
             >
               {(["p", "d", "q"] as const).map((label, i) => (
@@ -226,18 +236,21 @@ function ArimaCard({ data, error, loading, validating: isValidating, horizon, ma
                   />
                 </label>
               ))}
-              <Button size="sm" variant="primary">
+              <Button size="sm" variant="primary" disabled={isValidating}>
                 Fit
               </Button>
             </form>
           )}
+          {!manual && <RunButton ran={ran} stale={stale} busy={isValidating} onRun={run} />}
         </div>
       }
     >
       <ErrorBox error={error} />
+      {!ran && !manual && <RunPrompt onRun={run}>Auto mode selects the order among 9 ARIMA models and backtests the forecast, which takes about 10 s.</RunPrompt>}
+      {!ran && manual && <p className="py-4 text-sm text-slate-500">Set p, d, q and press Fit.</p>}
       {loading && <Spinner label={order ? "Fitting ARIMA…" : "Selecting the ARIMA order among 9 models (about 10 s)…"} />}
       {data && (
-        <div className={cx("flex flex-col gap-4 transition", isValidating && "opacity-60")}>
+        <div className={cx("flex flex-col gap-4 transition", (isValidating || stale) && "opacity-60")}>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-6">
             <Stat term="arimaOrder" label="Order" value={`(${data.order.join(", ")})`} hint={data.auto ? "auto-selected" : "manual"} />
             <Stat term="expectedReturn" label="Expected move" value={pct(data.expected_return)} className={signColor(data.expected_return)} hint={`to ${end?.date}`} />
@@ -318,10 +331,7 @@ function ArimaCard({ data, error, loading, validating: isValidating, horizon, ma
 
 function GarchPanel({ ticker, horizon, period }: { ticker: string; horizon: number; period: string }) {
   const [dist, setDist] = useState<GarchDist>("t");
-  const { data, error, isLoading, isValidating } = useSWR<GarchResult>(paths.garch(ticker, horizon, period, dist), fetcher, {
-    revalidateOnFocus: false,
-    keepPreviousData: true,
-  });
+  const { data, error, isLoading, isValidating, run, ran, stale } = useOnDemand<GarchResult>(paths.garch(ticker, horizon, period, dist));
 
   const rows = useMemo(() => {
     if (!data) return [];
@@ -340,13 +350,15 @@ function GarchPanel({ ticker, horizon, period }: { ticker: string; horizon: numb
         <div className="flex items-center gap-2 text-xs text-slate-400">
           <Term term="garchDist">Distribution</Term>
           <Segmented options={DISTS} value={dist} onChange={setDist} />
+          <RunButton ran={ran} stale={stale} busy={isValidating} onRun={() => run()} />
         </div>
       }
     >
       <ErrorBox error={error} />
+      {!ran && <RunPrompt onRun={() => run()}>Fits a GARCH(1,1) model to the daily returns and forecasts volatility over the horizon.</RunPrompt>}
       {isLoading && !data && <Spinner label="Fitting GARCH…" />}
       {data && (
-        <div className={cx("flex flex-col gap-4 transition", isValidating && "opacity-60")}>
+        <div className={cx("flex flex-col gap-4 transition", (isValidating || stale) && "opacity-60")}>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-6">
             <Stat term="conditionalVol" label="Current vol" value={pct(data.current_vol_annual, 1)} hint={`in ${horizon}d: ${pct(data.forecast.at(-1)?.vol_annual, 1)}`} />
             <Stat term="longRunVol" label="Long-run vol" value={pct(data.unconditional_vol_annual, 1)} />
