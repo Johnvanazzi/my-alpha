@@ -30,14 +30,70 @@ export function validateRows(rows: HoldingRow[]): string | null {
   return null;
 }
 
+export type HoldingsView = "category" | "weight";
+
+const UNCATEGORIZED = "Uncategorized";
+
 interface Props {
   rows: HoldingRow[];
   onChange: (rows: HoldingRow[]) => void;
+  /** Category per ticker; tickers missing from it (e.g. added but not saved yet) are uncategorized. */
+  categories?: Record<string, string>;
+  /** Saved weight per ticker, used for ordering so rows don't jump around while a weight is typed. */
+  savedWeights?: Record<string, number>;
+  view?: HoldingsView;
 }
 
-export function HoldingsEditor({ rows, onChange }: Props) {
+export function HoldingsEditor({ rows, onChange, categories, savedWeights = {}, view = "weight" }: Props) {
   const total = totalPct(rows);
   const update = (i: number, patch: Partial<HoldingRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
+  // Largest saved weight first; new rows keep the order they were added in, at the end.
+  const ordered = rows.map((r, i) => ({ r, i })).sort((a, b) => (savedWeights[b.r.ticker] ?? -1) - (savedWeights[a.r.ticker] ?? -1));
+  const groups: { name: string | null; items: typeof ordered }[] = [];
+  if (view === "category" && categories) {
+    const byName = new Map<string, typeof ordered>();
+    for (const item of ordered) {
+      const name = categories[item.r.ticker] ?? UNCATEGORIZED;
+      byName.set(name, [...(byName.get(name) ?? []), item]);
+    }
+    const weightOf = (items: typeof ordered) => items.reduce((s, { r }) => s + (parseFloat(r.weightPct) || 0), 0);
+    groups.push(
+      ...[...byName.entries()]
+        .map(([name, items]) => ({ name, items }))
+        .sort((a, b) => (a.name === UNCATEGORIZED ? 1 : b.name === UNCATEGORIZED ? -1 : weightOf(b.items) - weightOf(a.items))),
+    );
+  } else {
+    groups.push({ name: null, items: ordered });
+  }
+
+  const row = ({ r, i }: (typeof ordered)[number]) => (
+    <tr key={i} className="border-t border-slate-800">
+      <td className="py-1.5 pr-2">
+        <input
+          value={r.ticker}
+          onChange={(e) => update(i, { ticker: e.target.value.toUpperCase() })}
+          className="w-full rounded border border-transparent bg-transparent px-2 py-1 font-mono text-white hover:border-slate-700 focus:border-sky-500 focus:outline-none"
+        />
+      </td>
+      <td className="py-1.5 pr-2">
+        <input
+          type="number"
+          step="any"
+          min={0}
+          max={100}
+          value={r.weightPct}
+          onChange={(e) => update(i, { weightPct: e.target.value })}
+          className="tabular w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-right text-white focus:border-sky-500 focus:outline-none"
+        />
+      </td>
+      <td className="py-1.5 text-right">
+        <Button size="sm" variant="ghost" aria-label={`Remove ${r.ticker}`} onClick={() => onChange(rows.filter((_, j) => j !== i))}>
+          ✕
+        </Button>
+      </td>
+    </tr>
+  );
 
   const add = (symbol: string) => {
     if (rows.some((r) => r.ticker.toUpperCase() === symbol)) return;
@@ -65,35 +121,22 @@ export function HoldingsEditor({ rows, onChange }: Props) {
             <th className="w-10 pb-2" />
           </tr>
         </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i} className="border-t border-slate-800">
-              <td className="py-1.5 pr-2">
-                <input
-                  value={r.ticker}
-                  onChange={(e) => update(i, { ticker: e.target.value.toUpperCase() })}
-                  className="w-full rounded border border-transparent bg-transparent px-2 py-1 font-mono text-white hover:border-slate-700 focus:border-sky-500 focus:outline-none"
-                />
-              </td>
-              <td className="py-1.5 pr-2">
-                <input
-                  type="number"
-                  step="any"
-                  min={0}
-                  max={100}
-                  value={r.weightPct}
-                  onChange={(e) => update(i, { weightPct: e.target.value })}
-                  className="tabular w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-right text-white focus:border-sky-500 focus:outline-none"
-                />
-              </td>
-              <td className="py-1.5 text-right">
-                <Button size="sm" variant="ghost" aria-label={`Remove ${r.ticker}`} onClick={() => onChange(rows.filter((_, j) => j !== i))}>
-                  ✕
-                </Button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
+        {groups.map((g) => (
+          <tbody key={g.name ?? "all"}>
+            {g.name && (
+              <tr className="border-t border-slate-700">
+                <td className="pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-slate-300">
+                  {g.name} <span className="font-normal normal-case text-slate-500">· {g.items.length}</span>
+                </td>
+                <td className="tabular pb-1 pr-4 pt-3 text-right text-xs font-semibold text-slate-300">
+                  {g.items.reduce((s, { r }) => s + (parseFloat(r.weightPct) || 0), 0).toFixed(2)}%
+                </td>
+                <td />
+              </tr>
+            )}
+            {g.items.map(row)}
+          </tbody>
+        ))}
         <tfoot>
           <tr className="border-t border-slate-700">
             <td className="pt-2 text-xs uppercase tracking-wide text-slate-500">Total</td>

@@ -148,6 +148,8 @@ class ImportSummary(BaseModel):
     skipped: dict[str, int]
     unpriced: list[str]
     warnings: list[str]
+    # Trades of the file already in the portfolio (append imports only).
+    duplicates: int = 0
 
 
 class ImportResult(BaseModel):

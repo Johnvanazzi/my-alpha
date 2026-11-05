@@ -1,3 +1,4 @@
+from collections import Counter
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -23,7 +24,7 @@ from app.schemas import (
     TransactionOut,
     TransactionPage,
 )
-from app.services import fama_macbeth, hrp, portfolio_analytics, tearsheet, transactions
+from app.services import categories, fama_macbeth, hrp, portfolio_analytics, tearsheet, transactions
 from app.services.market_data import MarketDataError, get_split_adjusted_history
 
 router = APIRouter(prefix="/portfolios", tags=["portfolios"])
@@ -154,6 +155,57 @@ def _import(db: Session, portfolio: Portfolio, file: UploadFile) -> ImportResult
         skipped=parsed.skipped,
         unpriced=sim.unpriced,
         warnings=sim.warnings,
+    )
+    return ImportResult(portfolio=_out(_get(db, portfolio.id)), summary=summary)
+
+
+def _trade_key(t: transactions.Tx | Transaction) -> tuple:
+    # Movement and institution are left out so a trade entered by hand matches the statement's.
+    return (t.date, t.ticker, t.kind, round(t.quantity, 6), None if t.price is None else round(t.price, 4))
+
+
+def _append(db: Session, portfolio: Portfolio, file: UploadFile) -> ImportResult:
+    """Add the statement's trades that the portfolio doesn't have yet, keeping the rest.
+
+    Matching counts occurrences, so two identical trades on the same day in the file
+    are both kept when the portfolio has only one of them.
+    """
+    parsed = transactions.parse_statement(file.file.read())
+    known = Counter(_trade_key(t) for t in portfolio.transactions)
+    new: list[transactions.Tx] = []
+    for t in parsed.transactions:
+        key = _trade_key(t)
+        if known[key] > 0:
+            known[key] -= 1
+        else:
+            new.append(t)
+
+    unpriced: list[str] = []
+    warnings: list[str] = []
+    if new:
+        portfolio.transactions.extend(
+            Transaction(
+                date=t.date, ticker=t.ticker, kind=t.kind, quantity=t.quantity, price=t.price, amount=t.amount,
+                movement=t.movement, institution=t.institution,
+            )
+            for t in new
+        )
+        sim = transactions.simulate(_txs(portfolio))
+        unpriced, warnings = sim.unpriced, sim.warnings
+        # Same rule as _rebuild_positions: hand-set weights stay until synced explicitly.
+        if not portfolio.holdings or _tracks_positions(portfolio):
+            _apply_positions(portfolio, sim)
+        db.commit()
+    summary = ImportSummary(
+        rows=parsed.rows,
+        transactions=len(new),
+        start=parsed.transactions[0].date,
+        end=parsed.transactions[-1].date,
+        tickers=sorted({t.ticker for t in new}),
+        skipped=parsed.skipped,
+        unpriced=unpriced,
+        warnings=warnings,
+        duplicates=len(parsed.transactions) - len(new),
     )
     return ImportResult(portfolio=_out(_get(db, portfolio.id)), summary=summary)
 
@@ -322,6 +374,21 @@ def import_transactions(
         raise
 
 
+@router.post("/{portfolio_id}/transactions/append", response_model=ImportResult)
+def append_transactions(
+    portfolio_id: int,
+    file: UploadFile = File(..., description="B3 Negociação export (.xlsx)"),
+    db: Session = Depends(get_db),
+):
+    """Add a statement's new trades to the portfolio, skipping those it already has."""
+    portfolio = _get(db, portfolio_id)
+    try:
+        return _append(db, portfolio, file)
+    except Exception:
+        db.rollback()
+        raise
+
+
 @router.get("/{portfolio_id}/transactions", response_model=TransactionPage)
 def list_transactions(
     portfolio_id: int,
@@ -435,7 +502,16 @@ def portfolio_analytics_view(
     db: Session = Depends(get_db),
 ):
     portfolio = _get(db, portfolio_id)
-    return portfolio_analytics.analyze(_weights(portfolio), period, risk_free_rate, benchmark or portfolio.benchmark)
+    weights = _weights(portfolio)
+    return portfolio_analytics.analyze(
+        weights, period, risk_free_rate, benchmark or portfolio.benchmark, categories.categorize(list(weights))
+    )
+
+
+@router.get("/{portfolio_id}/categories", response_model=dict[str, str])
+def portfolio_categories(portfolio_id: int, db: Session = Depends(get_db)):
+    """Asset type of each holding (Stocks, FIIs, BDRs, ETFs…), from B3 ticker conventions."""
+    return categories.categorize([h.ticker for h in _get(db, portfolio_id).holdings])
 
 
 @router.get("/{portfolio_id}/composition")

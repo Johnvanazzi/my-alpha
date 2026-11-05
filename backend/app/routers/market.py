@@ -138,6 +138,7 @@ def screener_presets():
     return {
         "presets": [{"id": k, "name": v} for k, v in screener.PRESETS.items()],
         "sectors": screener.SECTORS,
+        "security_types": [{"id": k, "name": v} for k, v in screener.SECURITY_TYPES.items()],
         "sort_fields": list(screener.SORT_FIELDS),
         "filters": screener.filter_metadata(),
     }

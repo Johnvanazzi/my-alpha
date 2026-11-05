@@ -81,11 +81,43 @@ def resolve_risk_free(risk_free_rate: float | None) -> float:
     return get_risk_free_rate() if risk_free_rate is None else risk_free_rate
 
 
+def category_breakdown(
+    weights: pd.Series, asset_returns: pd.DataFrame, portfolio_returns: pd.Series, categories: dict[str, str], annual_rf: float
+) -> tuple[list[dict[str, Any]], pd.DataFrame, pd.DataFrame]:
+    """Per category: statistics, growth of 100 and cumulative contribution to the portfolio's return.
+
+    A category's return is that of its holdings at their weights within it. Its contribution
+    on day t is its weight times its return, scaled by the portfolio's growth up to t-1, so
+    the contributions of all categories add up exactly to the portfolio's total return.
+    """
+    prior_growth = (1 + portfolio_returns).cumprod().shift(1, fill_value=1.0)
+    by_category = weights.groupby(lambda t: categories.get(t, "Other")).sum().sort_values(ascending=False)
+    summary, growth, contribution = [], {}, {}
+    for i, (name, weight) in enumerate(by_category.items()):
+        members = [t for t in weights.index if categories.get(t, "Other") == name]
+        weight = float(weight)
+        returns = asset_returns[members] @ (weights[members] / weight)
+        growth[f"c{i}"] = (1 + returns).cumprod() * 100
+        contribution[f"c{i}"] = (prior_growth * weight * returns).cumsum()
+        summary.append(
+            {
+                "name": name,
+                "key": f"c{i}",
+                "tickers": members,
+                "weight": weight,
+                "contribution": clean_number(contribution[f"c{i}"].iloc[-1]),
+                **return_stats(returns, annual_rf),
+            }
+        )
+    return summary, pd.DataFrame(growth), pd.DataFrame(contribution)
+
+
 def analyze(
     weights: dict[str, float],
     period: str = "1y",
     risk_free_rate: float | None = None,
     benchmark: str | None = "SPY",
+    categories: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     weights, asset_returns, portfolio_returns = load_returns(weights, period)
     tickers = list(weights)
@@ -122,6 +154,11 @@ def analyze(
             benchmark_stats = None
             benchmark_error = f"Benchmark {benchmark.upper()} unavailable: {exc}"
 
+    category_stats, category_growth, category_contribution = category_breakdown(w, asset_returns, portfolio_returns, categories or {}, rf)
+
+    def series(frame: pd.DataFrame, idx: pd.Timestamp) -> dict[str, float | None]:
+        return {col: clean_number(frame.at[idx, col]) for col in frame.columns}
+
     return {
         "period": period,
         "start": asset_returns.index[0].date().isoformat(),
@@ -136,6 +173,13 @@ def analyze(
         "growth": [
             {"date": idx.date().isoformat(), **{col: clean_number(row[col]) for col in growth.columns}}
             for idx, row in growth.iterrows()
+        ],
+        "categories": category_stats,
+        # Keyed by each category's "key" (c0, c1…), since category names aren't safe chart keys.
+        "category_growth": [{"date": idx.date().isoformat(), **series(category_growth, idx)} for idx in category_growth.index],
+        "category_contribution": [
+            {"date": idx.date().isoformat(), "portfolio": clean_number(growth.at[idx, "portfolio"] / 100 - 1), **series(category_contribution, idx)}
+            for idx in category_contribution.index
         ],
     }
 

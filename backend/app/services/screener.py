@@ -4,10 +4,15 @@ Range filters are declared once in RANGE_FILTERS; `/screener/presets` exposes
 that metadata so the frontend builds its filter form from it. Values are in
 the units shown to the user (e.g. market cap in $B, ratios in percent) and
 scaled here before reaching Yahoo.
+
+Brazilian security types (stocks, FIIs, BDRs) can't be told apart in Yahoo's query
+language: they are all quoteType EQUITY and many FIIs carry no sector. They are
+classified from B3 ticker conventions after the query instead (see `security_type`).
 """
 
+import re
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
 
 import yfinance as yf
 from pydantic import BaseModel, Field
@@ -43,6 +48,44 @@ PRESETS = {
 
 # US exchanges other than OTC/pink sheets (Yahoo codes).
 US_LISTED_EXCHANGES = ["NMS", "NGM", "NCM", "NYQ", "ASE", "PCX", "BTS"]
+
+
+# B3 security types, filterable when region is "br".
+SECURITY_TYPES = {"stock": "Stocks", "fii": "FIIs", "bdr": "BDRs"}
+SecurityType = Literal["stock", "fii", "bdr"]
+
+# Standard-lot B3 tickers: 4-char root + share-class number (PETR4, HGLG11, AAPL34).
+# Fractional (PETR4F) and other suffixed variants don't match and are dropped by a type filter.
+_B3_TICKER = re.compile(r"^[A-Z0-9]{4}(\d{1,2})\.SA$")
+_BDR_CLASSES = {"31", "32", "33", "34", "35", "39"}
+# The 11 class mixes FIIs, units (share bundles like TAEE11), ETFs, Fiagros and infra funds;
+# only the name separates them.
+# Yahoo's FII names are inconsistent (typos, English, the administrator's "DTVM" name).
+_FII_NAME = re.compile(r"imobili|imoliar|immobil|i mobili|\bimob\b|\bim$|\bFII\b|\bDTVM\b|real estate|shopping|fdo inv", re.I)
+_NON_FII_FUND = re.compile(r"fiagro|[ií]ndice|\bETF\b|infra", re.I)
+_COMPANY_NAME = re.compile(r"\bS\.?/?A\.?$|\bS\.A\.|\bLtd\b|\bLtda\b|companhia|participations", re.I)
+_ANY_FUND = re.compile(r"fundo|\bfund\b|\bfic\b|[ií]ndice|\bETF\b", re.I)
+# Upper bound on matches fetched for post-query type filtering (Yahoo pages are 250 rows).
+TYPE_FILTER_MAX_ROWS = 5000
+_YAHOO_PAGE = 250
+
+
+def security_type(symbol: str | None, name: str | None) -> SecurityType | None:
+    """B3 type from the ticker's share-class number, or None for anything else."""
+    m = _B3_TICKER.match(symbol or "")
+    if not m:
+        return None
+    cls, name = m.group(1), name or ""
+    if cls in _BDR_CLASSES:
+        return "bdr"
+    if cls in {"3", "4", "5", "6", "7", "8"}:
+        return "stock"
+    if cls == "11":
+        if _FII_NAME.search(name) and not _NON_FII_FUND.search(name):
+            return "fii"
+        if _COMPANY_NAME.search(name) and not _ANY_FUND.search(name):
+            return "stock"  # unit
+    return None
 
 
 @dataclass(frozen=True)
@@ -116,6 +159,7 @@ class ScreenerFilters(BaseModel):
     region: str = "us"
     sector: str | None = None
     exclude_otc: bool = Field(default=True, description="US only: skip OTC / pink-sheet listings")
+    security_types: list[SecurityType] = Field(default=[], description="Brazil only: keep these B3 types; empty = all")
     ranges: dict[str, Range] = {}
     sort_by: str = "market_cap"
     sort_asc: bool = False
@@ -157,6 +201,7 @@ def _row(q: dict[str, Any]) -> dict[str, Any]:
         "symbol": q.get("symbol"),
         "name": q.get("longName") or q.get("shortName") or q.get("displayName"),
         "exchange": q.get("fullExchangeName") or q.get("exchange"),
+        "security_type": security_type(q.get("symbol"), q.get("longName") or q.get("shortName")),
         "currency": q.get("currency"),
         "price": clean_number(q.get("regularMarketPrice")),
         "change_percent": clean_number(q.get("regularMarketChangePercent")),
@@ -184,23 +229,53 @@ def _result(raw: dict[str, Any], offset: int, limit: int) -> dict[str, Any]:
     }
 
 
+def _screen(query: EquityQuery, f: ScreenerFilters, size: int, offset: int) -> dict[str, Any]:
+    try:
+        return yf.screen(query, sortField=SORT_FIELDS[f.sort_by], sortAsc=f.sort_asc, size=size, offset=offset)
+    except Exception as exc:  # yfinance raises a mix of ValueError/HTTP errors
+        raise MarketDataError(f"Screener request failed: {exc}") from exc
+
+
+def _typed_matches(query: EquityQuery, f: ScreenerFilters) -> list[dict[str, Any]]:
+    """Every match of `query` (in sort order) whose B3 type is selected.
+
+    Types are only known per row, so all pages are fetched and filtered here; the list
+    is cached per query+sort so paging through it doesn't refetch.
+    """
+    wanted = set(f.security_types)
+
+    def load() -> list[dict[str, Any]]:
+        quotes: list[dict[str, Any]] = []
+        for offset in range(0, TYPE_FILTER_MAX_ROWS, _YAHOO_PAGE):
+            page = _screen(query, f, _YAHOO_PAGE, offset).get("quotes") or []
+            quotes += page
+            if len(page) < _YAHOO_PAGE:
+                break
+        seen: set[str] = set()
+        out = []
+        for q in quotes:
+            sym = q.get("symbol")
+            if sym and sym not in seen and security_type(sym, q.get("longName") or q.get("shortName")) in wanted:
+                seen.add(sym)
+                out.append(q)
+        return out
+
+    key = ("screen_typed", f.model_dump_json(exclude={"limit", "offset"}))
+    return cached(market_cache, key, load)
+
+
 def run_screen(filters: ScreenerFilters) -> dict[str, Any]:
     if filters.sort_by not in SORT_FIELDS:
         raise ValueError(f"sort_by must be one of {', '.join(SORT_FIELDS)}")
     query = _build_query(filters)
 
+    if filters.security_types and filters.region.lower() == "br":
+        matches = _typed_matches(query, filters)
+        page = matches[filters.offset : filters.offset + filters.limit]
+        return _result({"total": len(matches), "quotes": page}, filters.offset, filters.limit)
+
     def load() -> dict[str, Any]:
-        try:
-            raw = yf.screen(
-                query,
-                sortField=SORT_FIELDS[filters.sort_by],
-                sortAsc=filters.sort_asc,
-                size=filters.limit,
-                offset=filters.offset,
-            )
-        except Exception as exc:  # yfinance raises a mix of ValueError/HTTP errors
-            raise MarketDataError(f"Screener request failed: {exc}") from exc
-        return _result(raw, filters.offset, filters.limit)
+        return _result(_screen(query, filters, filters.limit, filters.offset), filters.offset, filters.limit)
 
     return cached(market_cache, ("screen", filters.model_dump_json()), load)
 

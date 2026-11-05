@@ -13,7 +13,7 @@ import { HrpPanel } from "@/components/HrpView";
 import { TearsheetPanel } from "@/components/TearsheetView";
 import { BenchmarkPicker } from "@/components/BenchmarkPicker";
 import { Term } from "@/components/InfoTip";
-import { HoldingsEditor, type HoldingRow, toHoldings, toRows, validateRows } from "@/components/HoldingsEditor";
+import { HoldingsEditor, type HoldingRow, type HoldingsView, toHoldings, toRows, validateRows } from "@/components/HoldingsEditor";
 import { Button, Card, Empty, ErrorBox, Input, PageHeader, Segmented, Spinner } from "@/components/ui";
 import { api, fetcher, paths } from "@/lib/api";
 import { invalidatePortfolio } from "@/lib/onDemand";
@@ -31,6 +31,7 @@ const TABS: { value: Tab; label: string }[] = [
 ];
 
 const COLLAPSED_KEY = "my-alpha:holdings-collapsed";
+const HOLDINGS_VIEW_KEY = "my-alpha:holdings-view";
 
 const ANALYTICS_PERIODS = PERIODS.filter((p) => ["3mo", "6mo", "ytd", "1y", "2y", "5y", "10y"].includes(p.value));
 
@@ -55,12 +56,20 @@ export default function PortfolioPage() {
   const rfParsed = rfInput.trim() === "" ? null : parseFloat(rfInput) / 100;
   const rf = rfParsed != null && !isNaN(rfParsed) ? rfParsed : null;
 
-  // Remember whether the holdings panel is collapsed, per browser.
+  // Remember whether the holdings panel is collapsed and how it groups, per browser.
+  const [holdingsView, setHoldingsView] = useState<HoldingsView>("category");
   useEffect(() => {
     try {
       setCollapsed(localStorage.getItem(COLLAPSED_KEY) === "1");
+      if (localStorage.getItem(HOLDINGS_VIEW_KEY) === "weight") setHoldingsView("weight");
     } catch {}
   }, []);
+  const changeHoldingsView = (v: HoldingsView) => {
+    setHoldingsView(v);
+    try {
+      localStorage.setItem(HOLDINGS_VIEW_KEY, v);
+    } catch {}
+  };
   const toggleCollapsed = () => {
     setCollapsed((c) => {
       try {
@@ -94,6 +103,7 @@ export default function PortfolioPage() {
   const analytics = useSWR<Analytics>(
     hasHoldings && portfolio ? paths.analytics(id, period, rf, portfolio.benchmark) : null, fetcher, { revalidateOnFocus: false });
   const composition = useSWR<Composition>(hasHoldings ? paths.composition(id) : null, fetcher, { revalidateOnFocus: false });
+  const categories = useSWR<Record<string, string>>(hasHoldings ? paths.categories(id) : null, fetcher, { revalidateOnFocus: false });
 
   if (error) return <ErrorBox error={error} />;
   if (!portfolio) return <Spinner />;
@@ -207,12 +217,27 @@ export default function PortfolioPage() {
               </div>
             }
           >
+            {hasHoldings && (
+              <div className="mb-2 flex justify-end">
+                <Segmented
+                  options={[
+                    { value: "category", label: "By category" },
+                    { value: "weight", label: "By weight" },
+                  ]}
+                  value={holdingsView}
+                  onChange={changeHoldingsView}
+                />
+              </div>
+            )}
             <HoldingsEditor
               rows={rows}
               onChange={(r) => {
                 setRows(r);
                 setDirty(true);
               }}
+              view={holdingsView}
+              categories={categories.data}
+              savedWeights={Object.fromEntries(portfolio.holdings.map((h) => [h.ticker, h.weight]))}
             />
             {dirty && validation && <p className="mt-2 text-xs text-rose-400">{validation}</p>}
             {portfolio.weights_as_of && (

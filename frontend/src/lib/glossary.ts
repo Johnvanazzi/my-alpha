@@ -221,6 +221,10 @@ export const GLOSSARY = {
   priceToBook: { title: "Price/Book", text: "Share price divided by book value (equity) per share. Below 1 means the market values the company below its accounting equity; negative means negative equity." },
   avgVolume: { title: "Average volume (3M)", text: "Average shares traded per day over the last three months. Higher means more liquid and easier to trade without moving the price." },
   analystRating: { title: "Analyst rating", text: "Yahoo's average analyst recommendation from 1 (strong buy) to 5 (sell)." },
+  securityType: {
+    title: "Security type (B3)",
+    text: "Splits Brazilian listings by B3 ticker convention. Stocks: classes 3–8 (ON/PN, e.g. PETR4) plus company units ending in 11 (TAEE11). FIIs: real-estate funds ending in 11 (HGLG11). BDRs: receipts for foreign shares ending in 31–35 or 39 (AAPL34). ETFs, Fiagros, infra funds and fractional tickers (PETR4F) are left out once a type is picked. Pick several to combine them.",
+  },
   otc: { title: "OTC / pink sheets", text: "Over-the-counter listings (often foreign ADRs or small, thinly traded companies) with lighter reporting rules. Excluding them keeps NYSE, Nasdaq and NYSE American listings." },
   alpha: {
     title: "Alpha (Jensen's)",

@@ -57,6 +57,11 @@ export const api = {
     form.append("file", file);
     return request<ImportResult>(`/portfolios/${id}/transactions/import`, { method: "POST", body: form });
   },
+  appendTransactions: (id: number, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<ImportResult>(`/portfolios/${id}/transactions/append`, { method: "POST", body: form });
+  },
   syncPositions: (id: number) => request<Portfolio>(`/portfolios/${id}/positions/sync`, { method: "POST" }),
   addTransaction: (id: number, body: TransactionInput) =>
     request<Portfolio>(`/portfolios/${id}/transactions`, { method: "POST", body: json(body) }),
@@ -76,6 +81,7 @@ export const paths = {
   analytics: (id: number | string, period: string, rf: number | null, benchmark: string) =>
     `/portfolios/${id}/analytics?period=${period}&benchmark=${enc(benchmark)}${rf == null ? "" : `&risk_free_rate=${rf}`}`,
   composition: (id: number | string) => `/portfolios/${id}/composition`,
+  categories: (id: number | string) => `/portfolios/${id}/categories`,
   evolution: (id: number | string) => `/portfolios/${id}/evolution`,
   transactions: (id: number | string, limit: number, offset: number) => `/portfolios/${id}/transactions?limit=${limit}&offset=${offset}`,
   hrp: (id: number | string, period: string, linkage: string, rf: number | null) =>

@@ -65,6 +65,7 @@ export interface ImportSummary {
   skipped: Record<string, number>;
   unpriced: string[];
   warnings: string[];
+  duplicates: number;
 }
 
 export interface ImportResult {
@@ -115,6 +116,20 @@ export interface Analytics {
   benchmark_error: string | null;
   assets: (Stats & { ticker: string; weight: number; risk_contribution: number | null })[];
   growth: { date: string; portfolio: number | null; benchmark?: number | null }[];
+  categories: CategoryStats[];
+  /** Growth of 100 per category, keyed by CategoryStats.key. */
+  category_growth: { date: string; [key: string]: string | number | null }[];
+  /** Cumulative contribution to the portfolio's return per category (fractions), keyed by CategoryStats.key. */
+  category_contribution: { date: string; portfolio: number | null; [key: string]: string | number | null }[];
+}
+
+export interface CategoryStats extends Stats {
+  name: string;
+  /** Safe chart key for this category's series (c0, c1…). */
+  key: string;
+  tickers: string[];
+  weight: number;
+  contribution: number | null;
 }
 
 export interface Composition {
@@ -273,6 +288,8 @@ export interface ScreenerRow {
   symbol: string;
   name: string | null;
   exchange: string | null;
+  /** B3 type from the ticker convention; null outside Brazil or for ETFs, funds, fractional lots. */
+  security_type: SecurityType | null;
   currency: string | null;
   price: number | null;
   change_percent: number | null;
@@ -304,9 +321,12 @@ export interface ScreenerFilterMeta {
   unit: string;
 }
 
+export type SecurityType = "stock" | "fii" | "bdr";
+
 export interface ScreenerMeta {
   presets: { id: string; name: string }[];
   sectors: string[];
+  security_types: { id: SecurityType; name: string }[];
   sort_fields: string[];
   filters: ScreenerFilterMeta[];
 }
@@ -315,6 +335,8 @@ export interface ScreenerFilters {
   region: string;
   sector?: string | null;
   exclude_otc: boolean;
+  /** Brazil only; empty = all types. */
+  security_types: SecurityType[];
   ranges: Record<string, { min?: number | null; max?: number | null }>;
   sort_by: string;
   sort_asc: boolean;

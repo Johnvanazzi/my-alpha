@@ -339,28 +339,29 @@ function AddTradeForm({ portfolio, onAdded }: { portfolio: Portfolio; onAdded: (
   );
 }
 
-/** Import or re-import a statement, or snap manually edited weights back to the positions. */
+/** Import, re-import or add to a statement, or snap manually edited weights back to the positions. */
 function ImportActions({ portfolio }: { portfolio: Portfolio }) {
   const refresh = usePortfolioRefresh(portfolio.id);
   const input = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState<"import" | "sync" | null>(null);
+  const appendInput = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState<"import" | "append" | "sync" | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const hasTrades = portfolio.transaction_count > 0;
 
-  const reimport = async (file: File) => {
-    if (hasTrades && !confirm("Replace all trades of this portfolio with the spreadsheet's?")) return;
-    setBusy("import");
+  const upload = async (mode: "import" | "append", file: File) => {
+    if (mode === "import" && hasTrades && !confirm("Replace all trades of this portfolio with the spreadsheet's?")) return;
+    setBusy(mode);
     setError(null);
     try {
-      const result = await api.importTransactions(portfolio.id, file);
+      const result = await (mode === "import" ? api.importTransactions : api.appendTransactions)(portfolio.id, file);
       setSummary(result.summary);
       refresh(result.portfolio);
     } catch (err) {
       setError(err);
     } finally {
       setBusy(null);
-      if (input.current) input.current.value = "";
+      for (const el of [input.current, appendInput.current]) if (el) el.value = "";
     }
   };
 
@@ -390,6 +391,28 @@ function ImportActions({ portfolio }: { portfolio: Portfolio }) {
               {busy === "sync" ? "Syncing…" : "Sync weights to positions"}
             </Button>
           )}
+          {hasTrades && (
+            <>
+              <Button
+                size="sm"
+                onClick={() => appendInput.current?.click()}
+                disabled={busy !== null}
+                title="Add the trades of a B3 Negociação export that aren't in the portfolio yet, keeping the existing ones"
+              >
+                {busy === "append" ? "Importing…" : "Import new trades"}
+              </Button>
+              <input
+                ref={appendInput}
+                type="file"
+                accept=".xlsx"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) upload("append", f);
+                }}
+              />
+            </>
+          )}
           <Button
             size="sm"
             onClick={() => input.current?.click()}
@@ -405,7 +428,7 @@ function ImportActions({ portfolio }: { portfolio: Portfolio }) {
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) reimport(f);
+              if (f) upload("import", f);
             }}
           />
         </div>
@@ -414,6 +437,7 @@ function ImportActions({ portfolio }: { portfolio: Portfolio }) {
       {summary && (
         <p className="text-xs text-emerald-400">
           Imported {summary.transactions} of {summary.rows} trades ({summary.start} → {summary.end}, {summary.tickers.length} tickers)
+          {summary.duplicates > 0 && <span className="text-slate-500"> · {summary.duplicates} already in the portfolio</span>}
           {skipped.length > 0 && <span className="text-slate-500"> · skipped {skipped.map(([k, n]) => `${n} ${k}`).join(", ")}</span>}
         </p>
       )}

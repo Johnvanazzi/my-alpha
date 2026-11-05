@@ -8,7 +8,7 @@ import { Button, Card, cx, Empty, ErrorBox, Field, Input, PageHeader, Pager, Sel
 import { api, fetcher, paths } from "@/lib/api";
 import { compact, num, pct, pctRaw, signColor } from "@/lib/format";
 import type { GlossaryKey } from "@/lib/glossary";
-import type { ScreenerFilterMeta, ScreenerFilters, ScreenerMeta, ScreenerResult, ScreenerRow } from "@/lib/types";
+import type { ScreenerFilterMeta, ScreenerFilters, ScreenerMeta, ScreenerResult, ScreenerRow, SecurityType } from "@/lib/types";
 
 const REGIONS = [
   { value: "us", label: "United States" },
@@ -42,10 +42,12 @@ interface FormState {
   region: string;
   sector: string;
   excludeOtc: boolean;
+  /** Brazil only; empty = all types. */
+  types: SecurityType[];
   ranges: RangeDraft;
 }
 
-const INITIAL: FormState = { region: "us", sector: "", excludeOtc: true, ranges: { market_cap: { min: "10", max: "" } } };
+const INITIAL: FormState = { region: "us", sector: "", excludeOtc: true, types: [], ranges: { market_cap: { min: "10", max: "" } } };
 
 const toNumber = (v: string | undefined) => (v == null || v.trim() === "" || isNaN(Number(v)) ? null : Number(v));
 
@@ -121,7 +123,8 @@ export default function ScreenerPage() {
     for (const f of meta?.filters ?? []) map.set(f.group, [...(map.get(f.group) ?? []), f]);
     return [...map.entries()];
   }, [meta]);
-  const activeCount = Object.keys(toRanges(form.ranges)).length + (form.sector ? 1 : 0);
+  const brazil = form.region === "br";
+  const activeCount = Object.keys(toRanges(form.ranges)).length + (form.sector ? 1 : 0) + (brazil && form.types.length > 0 ? 1 : 0);
 
   const key = source && JSON.stringify({ source, page, pageSize, sort: source.kind === "custom" ? sort : null });
   const { data, error, isLoading, isValidating } = useSWR<ScreenerResult>(
@@ -133,6 +136,7 @@ export default function ScreenerPage() {
         region: source.form.region,
         sector: source.form.sector || null,
         exclude_otc: source.form.excludeOtc,
+        security_types: source.form.region === "br" ? source.form.types : [],
         ranges: toRanges(source.form.ranges),
         sort_by: sort.by,
         sort_asc: sort.asc,
@@ -143,6 +147,7 @@ export default function ScreenerPage() {
     { revalidateOnFocus: false, keepPreviousData: true },
   );
 
+  const toggleType = (t: SecurityType) => setForm((f) => ({ ...f, types: f.types.includes(t) ? f.types.filter((x) => x !== t) : [...f.types, t] }));
   const setRange = (k: string, v: { min: string; max: string }) => setForm((f) => ({ ...f, ranges: { ...f.ranges, [k]: v } }));
   const run = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -207,6 +212,28 @@ export default function ScreenerPage() {
                 <input type="checkbox" checked={form.excludeOtc} onChange={(e) => setForm((f) => ({ ...f, excludeOtc: e.target.checked }))} className="accent-sky-500" />
                 <Term term="otc">Exclude OTC / pink sheets</Term>
               </label>
+            )}
+            {brazil && (
+              // Not a <Field>: a <label> would forward clicks on its text to the first button.
+              <div className="flex flex-col gap-1 text-xs text-slate-400">
+                <Term term="securityType">Security type</Term>
+                <div className="flex flex-wrap gap-1.5" role="group" aria-label="Security type">
+                  {[{ id: null, name: "All" }, ...(meta?.security_types ?? [])].map((t) => {
+                    const on = t.id ? form.types.includes(t.id) : form.types.length === 0;
+                    return (
+                      <button
+                        key={t.id ?? "all"}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => (t.id ? toggleType(t.id) : setForm((f) => ({ ...f, types: [] })))}
+                        className={cx("rounded-full border px-3 py-1 text-xs transition", on ? "border-sky-500 bg-sky-500/10 text-sky-300" : "border-slate-700 text-slate-400 hover:text-slate-200")}
+                      >
+                        {t.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             )}
 
             {groups
